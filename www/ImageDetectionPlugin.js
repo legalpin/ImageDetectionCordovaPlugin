@@ -3,6 +3,9 @@
 **/
 var ImageDetectionPlugin = function () {};
 
+ImageDetectionPlugin.prototype.openCamera = function (successCallback, errorCallback) {
+  cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "openCamera", []);
+};
 ImageDetectionPlugin.prototype.startProcessing = function (bool, successCallback, errorCallback) {
   cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "startProcessing", [bool, window.innerHeight, window.innerWidth]);
 };

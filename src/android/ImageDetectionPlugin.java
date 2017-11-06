@@ -171,7 +171,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         sendViewToBack(cameraFrameLayout);
 
         setCameraIndex(CAMERA_ID_BACK);
-        openCamera();
+        //openCamera();
 
         cameraFrameLayout.setVisibility(View.INVISIBLE);
     }
@@ -179,6 +179,18 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     @Override
     public boolean execute(String action, JSONArray data,
                            CallbackContext callbackContext) throws JSONException {
+
+
+        if (action.equals("openCamera")) {
+            openCamera();
+            return true;
+        }
+
+        if (action.equals("release")) {
+            if(camera != null)
+                camera.release();
+            return true;
+        }
 
         if (action.equals("greet")) {
             Log.i(TAG, "greet called");
@@ -339,9 +351,9 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             Log.d(TAG, "OpenCV library found inside package. Using it!");
             mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
         }
-        if (camera == null) {
-            openCamera();
-        }
+        //if (camera == null) {
+        //    openCamera();
+        //}
     }
 
     @Override
