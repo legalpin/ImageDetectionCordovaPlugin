@@ -6,10 +6,7 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.ImageFormat;
-import android.graphics.PixelFormat;
+import android.graphics.*;
 import android.hardware.Camera;
 import android.os.Build;
 import android.os.Environment;
@@ -172,6 +169,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         setCameraIndex(CAMERA_ID_BACK);
         //openCamera();
+        //camera.stopPreview();
 
         cameraFrameLayout.setVisibility(View.INVISIBLE);
     }
@@ -180,17 +178,34 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     public boolean execute(String action, JSONArray data,
                            CallbackContext callbackContext) throws JSONException {
 
-
+        Log.d(TAG, "************************************ CORDOVA EXCECUTE: "+action);
         if (action.equals("openCamera")) {
-            openCamera();
+            Log.d(TAG, "*********** OPEN CAMERA");
+
+            if(camera == null) {
+              openCamera();
+              initializeCamera(1080, 1920);
+            }
+
+            if(camera != null)
+              camera.startPreview();
+
             return true;
         }
 
-        if (action.equals("release")) {
-            if(camera != null)
-                camera.release();
+        if (action.equals("closeCamera")) {
+            Log.d(TAG, "*********** CLOSE CAMERA");
+
+            if(camera != null) {
+              camera.stopPreview();
+              //camera.release();
+              //camera = null;
+            }
+
+            setWhiteBackground(surfaceHolder);
             return true;
         }
+
 
         if (action.equals("greet")) {
             Log.i(TAG, "greet called");
@@ -351,9 +366,12 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             Log.d(TAG, "OpenCV library found inside package. Using it!");
             mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
         }
-        //if (camera == null) {
-        //    openCamera();
-        //}
+/*
+        if (camera == null) {
+            openCamera();
+            camera.stopPreview();
+        }
+*/
     }
 
     @Override
@@ -366,6 +384,14 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         super.onDestroy();
     }
 
+    private void setWhiteBackground(SurfaceHolder holder) {
+        Canvas canvas = holder.lockCanvas();
+        if (canvas != null) {
+            canvas.drawRGB(255, 255, 255);
+            holder.unlockCanvasAndPost(canvas);
+        }
+    }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         matches = new MatOfDMatch();
@@ -373,6 +399,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         orbDescriptor = DescriptorExtractor.create(DescriptorExtractor.ORB);
         kp2 = new MatOfKeyPoint();
         desc2 = new Mat();
+        setWhiteBackground(holder);
     }
 
     @Override
@@ -399,6 +426,9 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             }
             previewing = true;
         }
+
+        setWhiteBackground(holder);
+
     }
 
     @Override
@@ -418,6 +448,8 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
     @SuppressWarnings("deprecation")
     private void openCamera() {
+        Log.d(TAG, " ************* OPEN CAMERA CALLED");
+
         camera = null;
 
         if (mCameraIndex == CAMERA_ID_ANY) {
@@ -484,7 +516,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
     @SuppressWarnings("deprecation")
     private boolean initializeCamera(int height, int width) {
-        Log.d(TAG, "Initialize java camera");
+        Log.d(TAG, " ****************** Initialize java camera: height="+height+" width="+width);
         boolean result = true;
         synchronized (this) {
             if (camera == null)
@@ -572,7 +604,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
                     /* Finally we are ready to start the preview */
                     Log.d(TAG, "startPreview");
-                    camera.startPreview();
+                    //camera.startPreview();
                 }
                 else
                     result = false;
