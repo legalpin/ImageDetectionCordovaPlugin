@@ -55,10 +55,13 @@ import org.opencv.core.KeyPoint;
 import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.imgproc.Imgproc;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Timer;
+import java.util.TimerTask;
 
 public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder.Callback {
 
@@ -150,6 +153,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         SurfaceView surfaceView = new SurfaceView(activity.getApplicationContext());
+        surfaceView.setBackgroundColor(Color.WHITE);
 
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -158,20 +162,18 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         cameraFrameLayout = new FrameLayout(activity.getApplicationContext());
 
-        cameraFrameLayout.addView(surfaceView);
-
         activity.getWindow().addContentView(cameraFrameLayout, params);
 
         surfaceHolder = surfaceView.getHolder();
         surfaceHolder.addCallback(this);
 
+        cameraFrameLayout.addView(surfaceView);
+        cameraFrameLayout.setVisibility(View.VISIBLE);
+
         sendViewToBack(cameraFrameLayout);
 
         setCameraIndex(CAMERA_ID_BACK);
-        //openCamera();
-        //camera.stopPreview();
 
-        cameraFrameLayout.setVisibility(View.INVISIBLE);
     }
 
     @Override
@@ -182,27 +184,30 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         if (action.equals("openCamera")) {
             Log.d(TAG, "*********** OPEN CAMERA");
 
+            closeCamera();
+
             if(camera == null) {
-              openCamera();
-              initializeCamera(1080, 1920);
+                openCamera();
+                initializeCamera(1920, 1080);
             }
 
-            if(camera != null)
-              camera.startPreview();
+            if(camera != null) {
+                Log.d(TAG, "*********** SURFACE FRAME:" +surfaceHolder.getSurfaceFrame().flattenToString());
+                try {
+                    camera.setPreviewDisplay(surfaceHolder);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                camera.startPreview();
+            }
 
             return true;
         }
 
         if (action.equals("closeCamera")) {
-            Log.d(TAG, "*********** CLOSE CAMERA");
+            Log.d(TAG, "*********** CLOSE CAMERA (ok)");
 
-            if(camera != null) {
-              camera.stopPreview();
-              //camera.release();
-              //camera = null;
-            }
-
-            setWhiteBackground(surfaceHolder);
+            closeCamera2();
             return true;
         }
 
@@ -296,6 +301,87 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         return false;
     }
 
+    private void closeCamera() {
+        if(camera != null) {
+            Log.d(TAG, "*********** CAMERA IS NOT NULL!!");
+            camera.setPreviewCallback(null);
+
+            camera.stopPreview();
+            camera.release();
+            previewing = false;
+            cameraId = -1;
+            camera = null;
+        }
+
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                cameraFrameLayout.removeAllViews();
+
+                SurfaceView surfaceView = new SurfaceView(activity.getApplicationContext());
+
+                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Gravity.CENTER);
+
+                cameraFrameLayout = new FrameLayout(activity.getApplicationContext());
+                cameraFrameLayout.setVisibility(View.VISIBLE);
+                cameraFrameLayout.addView(surfaceView);
+
+                activity.getWindow().addContentView(cameraFrameLayout, params);
+
+                surfaceHolder = surfaceView.getHolder();
+                sendViewToBack(cameraFrameLayout);
+
+                setCameraIndex(CAMERA_ID_BACK);
+                //setWhiteBackground(surfaceHolder);
+
+            }
+        });
+    }
+
+    private void closeCamera2() {
+        if(camera != null) {
+            Log.d(TAG, "*********** CAMERA IS NOT NULL!!");
+            camera.setPreviewCallback(null);
+
+            camera.stopPreview();
+            camera.release();
+            previewing = false;
+            cameraId = -1;
+            camera = null;
+        }
+
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                cameraFrameLayout.removeAllViews();
+
+                SurfaceView surfaceView = new SurfaceView(activity.getApplicationContext());
+                surfaceView.setBackgroundColor(Color.WHITE);
+
+                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Gravity.CENTER);
+
+                cameraFrameLayout = new FrameLayout(activity.getApplicationContext());
+                cameraFrameLayout.setVisibility(View.VISIBLE);
+                cameraFrameLayout.addView(surfaceView);
+
+                activity.getWindow().addContentView(cameraFrameLayout, params);
+
+                surfaceHolder = surfaceView.getHolder();
+                sendViewToBack(cameraFrameLayout);
+
+                setCameraIndex(CAMERA_ID_BACK);
+                //setWhiteBackground(surfaceHolder);
+
+            }
+        });
+    }
+
     @Override
     public void onStart()
     {
@@ -329,7 +415,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         called_failed_detection = true;
 
         last_time = new Date();
-
+/*
         new android.os.Handler().postDelayed(
             new Runnable() {
                 public void run() {
@@ -337,6 +423,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                     cameraFrameLayout.invalidate();
                 }
             }, 2000);
+*/
     }
 
     public static void sendViewToBack(final View child) {
@@ -385,11 +472,13 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     }
 
     private void setWhiteBackground(SurfaceHolder holder) {
+
         Canvas canvas = holder.lockCanvas();
         if (canvas != null) {
             canvas.drawRGB(255, 255, 255);
             holder.unlockCanvasAndPost(canvas);
         }
+
     }
 
     @Override
@@ -399,7 +488,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         orbDescriptor = DescriptorExtractor.create(DescriptorExtractor.ORB);
         kp2 = new MatOfKeyPoint();
         desc2 = new Mat();
-        setWhiteBackground(holder);
+        //setWhiteBackground(holder);
     }
 
     @Override
@@ -427,7 +516,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             previewing = true;
         }
 
-        setWhiteBackground(holder);
+        //setWhiteBackground(holder);
 
     }
 
@@ -598,7 +687,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                         params.setPreviewFrameRate(24);// set camera preview
 
                         camera.setParameters(params);
-                        camera.setPreviewDisplay(surfaceHolder);
+                        //camera.setPreviewDisplay(surfaceHolder);
                         camera.setPreviewCallback(previewCallback);
                     }
 
