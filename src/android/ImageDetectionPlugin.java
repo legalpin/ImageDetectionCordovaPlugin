@@ -180,37 +180,15 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     public boolean execute(String action, JSONArray data,
                            CallbackContext callbackContext) throws JSONException {
 
-        Log.d(TAG, "************************************ CORDOVA EXCECUTE: "+action);
         if (action.equals("openCamera")) {
-            Log.d(TAG, "*********** OPEN CAMERA");
-
-            closeCamera();
-
-            if(camera == null) {
-                openCamera();
-                initializeCamera(1920, 1080);
-            }
-
-            if(camera != null) {
-                Log.d(TAG, "*********** SURFACE FRAME:" +surfaceHolder.getSurfaceFrame().flattenToString());
-                try {
-                    camera.setPreviewDisplay(surfaceHolder);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-                camera.startPreview();
-            }
-
+            openCamera();
             return true;
         }
 
         if (action.equals("closeCamera")) {
-            Log.d(TAG, "*********** CLOSE CAMERA (ok)");
-
-            closeCamera2();
+            closeCamera();
             return true;
         }
-
 
         if (action.equals("greet")) {
             Log.i(TAG, "greet called");
@@ -302,64 +280,28 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     }
 
     private void closeCamera() {
-        if(camera != null) {
-            Log.d(TAG, "*********** CAMERA IS NOT NULL!!");
-            camera.setPreviewCallback(null);
+        if(camera == null)
+            return;
 
-            camera.stopPreview();
-            camera.release();
-            previewing = false;
-            cameraId = -1;
-            camera = null;
-        }
+        camera.setPreviewCallback(null);
 
-        activity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                cameraFrameLayout.removeAllViews();
-
-                SurfaceView surfaceView = new SurfaceView(activity.getApplicationContext());
-
-                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        Gravity.CENTER);
-
-                cameraFrameLayout = new FrameLayout(activity.getApplicationContext());
-                cameraFrameLayout.setVisibility(View.VISIBLE);
-                cameraFrameLayout.addView(surfaceView);
-
-                activity.getWindow().addContentView(cameraFrameLayout, params);
-
-                surfaceHolder = surfaceView.getHolder();
-                sendViewToBack(cameraFrameLayout);
-
-                setCameraIndex(CAMERA_ID_BACK);
-                //setWhiteBackground(surfaceHolder);
-
-            }
-        });
+        camera.stopPreview();
+        camera.release();
+        previewing = false;
+        cameraId = -1;
+        camera = null;
+        setCameraBackground(true);
     }
 
-    private void closeCamera2() {
-        if(camera != null) {
-            Log.d(TAG, "*********** CAMERA IS NOT NULL!!");
-            camera.setPreviewCallback(null);
-
-            camera.stopPreview();
-            camera.release();
-            previewing = false;
-            cameraId = -1;
-            camera = null;
-        }
-
+    private void setCameraBackground(final boolean white ) {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 cameraFrameLayout.removeAllViews();
 
                 SurfaceView surfaceView = new SurfaceView(activity.getApplicationContext());
-                surfaceView.setBackgroundColor(Color.WHITE);
+                if(white)
+                    surfaceView.setBackgroundColor(Color.WHITE);
 
                 FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -537,7 +479,10 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
     @SuppressWarnings("deprecation")
     private void openCamera() {
-        Log.d(TAG, " ************* OPEN CAMERA CALLED");
+        if(camera != null)
+            closeCamera();
+
+        setCameraBackground(false);
 
         camera = null;
 
@@ -601,11 +546,21 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                 cameraId = localCameraIndex;
             }
         }
+
+        Rect rect = surfaceHolder.getSurfaceFrame();
+        initializeCamera(rect.height(), rect.width());
+        if(camera != null) {
+            try {
+                camera.setPreviewDisplay(surfaceHolder);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            camera.startPreview();
+        }
     }
 
     @SuppressWarnings("deprecation")
     private boolean initializeCamera(int height, int width) {
-        Log.d(TAG, " ****************** Initialize java camera: height="+height+" width="+width);
         boolean result = true;
         synchronized (this) {
             if (camera == null)
