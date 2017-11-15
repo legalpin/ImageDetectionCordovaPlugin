@@ -7,6 +7,7 @@ import android.content.DialogInterface;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.*;
+import android.graphics.Rect;
 import android.hardware.Camera;
 import android.os.Build;
 import android.os.Environment;
@@ -36,24 +37,16 @@ import org.opencv.android.LoaderCallbackInterface;
 import org.opencv.android.OpenCVLoader;
 import org.opencv.android.Utils;
 import org.opencv.calib3d.Calib3d;
-import org.opencv.core.Core;
-import org.opencv.core.CvType;
-import org.opencv.core.Mat;
-import org.opencv.core.MatOfByte;
-import org.opencv.core.MatOfDMatch;
-import org.opencv.core.MatOfKeyPoint;
-import org.opencv.core.MatOfPoint2f;
+import org.opencv.core.*;
 import org.opencv.core.Point;
-import org.opencv.core.Scalar;
-import org.opencv.core.Size;
-import org.opencv.core.DMatch;
 import org.opencv.features2d.DescriptorExtractor;
 import org.opencv.features2d.DescriptorMatcher;
 import org.opencv.features2d.FeatureDetector;
 import org.opencv.features2d.Features2d;
-import org.opencv.core.KeyPoint;
 import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.imgproc.Imgproc;
+import org.opencv.objdetect.CascadeClassifier;
+import org.opencv.objdetect.Objdetect;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -95,7 +88,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
     private double timeout = 0.0;
     private int cameraId = -1;
-    private int mCameraIndex = CAMERA_ID_ANY;
+    private int mCameraIndex = CAMERA_ID_FRONT;
 
     private BaseLoaderCallback mLoaderCallback;
     private FrameLayout cameraFrameLayout;
@@ -108,6 +101,11 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
     private String coords;
     private int screenWidth = 1, screenHeight = 1;
+
+    // Mios
+    Mat grayFrame;
+    CascadeClassifier faceCascade;
+    CascadeClassifier eyeCascade;
 
     @SuppressWarnings("deprecation")
     private static class JavaCameraSizeAccessor implements CameraBridgeViewBase.ListItemAccessor {
@@ -173,6 +171,11 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         sendViewToBack(cameraFrameLayout);
 
         setCameraIndex(CAMERA_ID_BACK);
+
+        System.loadLibrary("opencv_java3");
+
+        faceCascade = new CascadeClassifier("resources/lbpcascades/haarcascade_frontalface_alt.xml");
+        eyeCascade = new CascadeClassifier("resources/lbpcascades/haarcascade_eye.xml");
 
     }
 
@@ -388,13 +391,16 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     @Override
     public void onResume(boolean multitasking) {
         super.onResume(multitasking);
+
         if (!OpenCVLoader.initDebug()) {
             Log.d(TAG, "Internal OpenCV library not found. Using OpenCV Manager for initialization");
-            OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION_3_1_0, activity, mLoaderCallback);
+
+            //OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION_3_1_0, activity, mLoaderCallback);
         } else {
             Log.d(TAG, "OpenCV library found inside package. Using it!");
             mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
         }
+
 /*
         if (camera == null) {
             openCamera();
@@ -684,7 +690,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private final Camera.PreviewCallback previewCallback = new Camera.PreviewCallback() {
         @Override
         public void onPreviewFrame(byte[] data, Camera camera) {
-            //Log.d(TAG, "ON Preview frame");
+            //Log.d(TAG, "ON Preview frame: "+System.currentTimeMillis());
 
             Date current_time = new Date();
             double time_passed = Math.abs(current_time.getTime() - last_time.getTime())/1000.0;
@@ -703,12 +709,15 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                     mYuv = new Mat(params.getPreviewSize().height, params.getPreviewSize().width, CvType.CV_8UC1);
                     mYuv.put(0, 0, data);
 
-                    for (int i = 0; i < triggers.size(); i++) {
-                        Mat pattern = triggers.get(i);
-                        MatOfKeyPoint kp1 = triggers_kps.get(i);
-                        Mat desc1 = triggers_descs.get(i);
-                        processFrame(pattern, kp1, desc1, i);
-                    }
+                    if(grayFrame!=null)
+                        grayFrame.release();
+
+                    Mat grayFrame = new Mat();
+
+                    Imgproc.cvtColor(mYuv, grayFrame, Imgproc.COLOR_BGR2GRAY);
+                    Imgproc.equalizeHist(grayFrame, grayFrame);
+
+                    processFrame(grayFrame);
                 }
                 //update time and reset timeout
                 last_time = current_time;
@@ -718,223 +727,18 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         }
     };
 
-    private void processFrame(Mat _pattern, MatOfKeyPoint _kp1, Mat _desc1, int _index) {
-        final Mat pattern = _pattern;
-        final MatOfKeyPoint kp1 = _kp1;
-        final Mat desc1 = _desc1;
-        final int index = _index;
+    final private void processFrame(final Mat grayFrame) {
+        final int absoluteFaceSize = Math.round(grayFrame.height() * 0.2f);
+
+        final MatOfRect faces = new MatOfRect();
+
+
         cordova.getThreadPool().execute(new Runnable() {
             public void run() {
-                Mat gray = mYuv.submat(0, mYuv.rows(), 0, mYuv.cols()).t();
-                Core.flip(gray, gray, 1);
-                DescriptorMatcher matcherHamming = DescriptorMatcher.create(DescriptorMatcher.BRUTEFORCE_HAMMINGLUT);
-
-                if(save_files) {
-                    if (count % 10 == 0) {
-                        String extStorageDirectory = Environment.getExternalStorageDirectory().toString();
-                        Imgcodecs.imwrite(extStorageDirectory + "/pic" + count + ".png", gray);
-                        Log.i("### FILE ###", "File saved to " + extStorageDirectory + "/pic" + count + ".png");
-                    }
-                    count++;
-                }
-
-                //Imgproc.equalizeHist(gray, gray);
-
-                orbDetector.detect(gray, kp2);
-                orbDescriptor.compute(gray, kp2, desc2);
-
-                if (!desc1.empty() && !desc2.empty()) {
-                    matcherHamming.match(desc1, desc2, matches);
-
-                    List<DMatch> matchesList = matches.toList();
-                    LinkedList<DMatch> good_matches = new LinkedList<>();
-                    MatOfDMatch gm = new MatOfDMatch();
-
-                    double minDistance = 1000;
-
-                    int rowCount;
-
-                    if(desc1.rows() < matchesList.size())
-                        rowCount = desc1.rows();
-                    else
-                        rowCount = matchesList.size();
-
-                    for (int i = 0; i < rowCount; i++) {
-                        double dist = matchesList.get(i).distance;
-                        if (dist < minDistance) {
-                            minDistance = dist;
-                        }
-                    }
-
-                    LinkedList<DMatch> good_matches_reduced = new LinkedList<>();
-                    MatOfDMatch gmr = new MatOfDMatch();
-                    double upperBound = 2 * minDistance;
-                    for (int i = 0; i < rowCount; i++) {
-                        if (matchesList.get(i).distance < upperBound && good_matches.size() < 500) {
-                            good_matches.addLast(matchesList.get(i));
-                            if(i < 10 && debug)
-                            {
-                                good_matches_reduced.addLast(matchesList.get(i));
-                            }
-                        }
-                    }
-                    gm.fromList(good_matches);
-                    if(debug) {
-                        gmr.fromList(good_matches_reduced);
-                    }
-
-                    if (good_matches.size() >= 8) {
-                        Mat img_matches = null;
-                        if (debug) {
-                            img_matches = gray.clone();
-                            Features2d.drawMatches(
-                                    pattern,
-                                    kp1,
-                                    gray,
-                                    kp2,
-                                    gmr,
-                                    img_matches,
-                                    new Scalar(255, 0, 0),
-                                    new Scalar(0, 0, 255),
-                                    new MatOfByte(),
-                                    2);
-                        }
-
-                        LinkedList<Point> objList = new LinkedList<>();
-                        LinkedList<Point> sceneList = new LinkedList<>();
-
-                        List<KeyPoint> keypoints_objList = kp1.toList();
-                        List<KeyPoint> keypoints_sceneList = kp2.toList();
-
-                        for (int i = 0; i < good_matches.size(); i++) {
-                            objList.addLast(keypoints_objList.get(good_matches.get(i).queryIdx).pt);
-                            sceneList.addLast(keypoints_sceneList.get(good_matches.get(i).trainIdx).pt);
-                        }
-
-                        MatOfPoint2f obj = new MatOfPoint2f();
-                        obj.fromList(objList);
-
-                        MatOfPoint2f scene = new MatOfPoint2f();
-                        scene.fromList(sceneList);
-
-                        Mat H = Calib3d.findHomography(obj, scene, Calib3d.RANSAC, 5);
-
-                        boolean result = true;
-
-                        double det = 0, N1 = 0, N2 = 0, N3 = 0;
-
-                        if (!H.empty()) {
-                            double[] p1 = H.get(0, 0);
-                            double[] p2 = H.get(1, 1);
-                            double[] p3 = H.get(1, 0);
-                            double[] p4 = H.get(0, 1);
-                            double[] p5 = H.get(2, 0);
-                            double[] p6 = H.get(2, 1);
-
-                            if (p1 != null && p2 != null && p3 != null && p4 != null) {
-                                det = p1[0] * p2[0] - p3[0] * p4[0];
-                                if (det < 0) {
-                                    result = false;
-                                }
-                            } else {
-                                result = false;
-                            }
-
-                            if (p1 != null && p3 != null) {
-                                N1 = Math.sqrt(p1[0] * p1[0] + p3[0] * p3[0]);
-                                if (N1 > 4 || N1 < 0.1) {
-                                    result = false;
-                                }
-                            } else {
-                                result = false;
-                            }
-
-                            if (p2 != null && p4 != null) {
-                                N2 = Math.sqrt(p4[0] * p4[0] + p2[0] * p2[0]);
-                                if (N2 > 4 || N2 < 0.1) {
-                                    result = false;
-                                }
-                            } else {
-                                result = false;
-                            }
-
-                            if (p5 != null && p6 != null) {
-                                N3 = Math.sqrt(p5[0] * p5[0] + p6[0] * p6[0]);
-                                if (N3 > 0.002) {
-                                    result = false;
-                                }
-                            } else {
-                                result = false;
-                            }
-                        } else {
-                            result = false;
-                        }
-
-                        if (debug) {
-                            Log.i("####### DEBUG #######", det + " " + N1 + " " + N2 + " " + N3);
-                        }
-
-                        if (result) {
-                            Log.i("#### DETECTION ####", "Detected stuff");
-                            updateState(true, index);
-                            Mat obj_corners = new Mat(4, 1, CvType.CV_32FC2);
-                            Mat scene_corners = new Mat(4, 1, CvType.CV_32FC2);
-
-                            obj_corners.put(0, 0, 0, 0);
-                            obj_corners.put(1, 0, pattern.cols(), 0);
-                            obj_corners.put(2, 0, pattern.cols(), pattern.rows());
-                            obj_corners.put(3, 0, 0, pattern.rows());
-
-                            Core.perspectiveTransform(obj_corners, scene_corners, H);
-
-                            // get mat size to match the detected coordinates with the screen size
-                            double width = (double)(gray.cols());
-                            double height = (double)(gray.rows());
-                            double scaleX = screenWidth/width;
-                            double scaleY = screenHeight/height;
-
-                            double coord1X = scene_corners.get(0, 0)[0] * scaleX;
-                            double coord1Y = scene_corners.get(0, 0)[1] * scaleY;
-                            double coord2X = scene_corners.get(1, 0)[0] * scaleX;
-                            double coord2Y = scene_corners.get(1, 0)[1] * scaleY;
-                            double coord3X = scene_corners.get(2, 0)[0] * scaleX;
-                            double coord3Y = scene_corners.get(2, 0)[1] * scaleY;
-                            double coord4X = scene_corners.get(3, 0)[0] * scaleX;
-                            double coord4Y = scene_corners.get(3, 0)[1] * scaleY;
-
-                            // find center of rect based on triangles centroids mean
-                            double centroidTriang1X = (coord1X + coord2X + coord3X)/3;
-                            double centroidTriang1Y = (coord1Y + coord2Y + coord3Y)/3;
-
-                            double centroidTriang2X = (coord3X + coord4X + coord1X)/3;
-                            double centroidTriang2Y = (coord3Y + coord4Y + coord1Y)/3;
-
-                            double centerx = (centroidTriang1X + centroidTriang2X)/2;
-                            double centery = (centroidTriang1Y + centroidTriang2Y)/2;
-
-                            coords = "\"coords\": {" +
-                                    "\"1\": {\"x\": " + coord1X + ", \"y\": " + coord1Y + "}, " +
-                                    "\"2\": {\"x\": " + coord2X + ", \"y\": " + coord2Y + "}, " +
-                                    "\"3\": {\"x\": " + coord3X + ", \"y\": " + coord3Y + "}, " +
-                                    "\"4\": {\"x\": " + coord4X + ", \"y\": " + coord4Y + "}}, " +
-                                    "\"center\": {\"x\": " + centerx + ", \"y\": " + centery + "}";
-
-                            if (debug) {
-                                Imgproc.line(img_matches, new Point(scene_corners.get(0, 0)), new Point(scene_corners.get(1, 0)), new Scalar(0, 255, 0), 4);
-                                Imgproc.line(img_matches, new Point(scene_corners.get(1, 0)), new Point(scene_corners.get(2, 0)), new Scalar(0, 255, 0), 4);
-                                Imgproc.line(img_matches, new Point(scene_corners.get(2, 0)), new Point(scene_corners.get(3, 0)), new Scalar(0, 255, 0), 4);
-                                Imgproc.line(img_matches, new Point(scene_corners.get(3, 0)), new Point(scene_corners.get(0, 0)), new Scalar(0, 255, 0), 4);
-                            }
-                        } else {
-                            updateState(false, index);
-                        }
-                        H.release();
-                    }
-                }
-                gray.release();
-                if(index == (trigger_size - 1)) {
-                    thread_over = true;
-                }
+                faceCascade.detectMultiScale(grayFrame, faces, 1.1, 2, 0 | Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
+                org.opencv.core.Rect[] facesArray = faces.toArray();
+                for (int i = 0; i < facesArray.length; i++)
+                    Log.d(TAG, "Face detected: tl="+facesArray[i].tl()+" br="+facesArray[i].br());
             }
         });
     }
