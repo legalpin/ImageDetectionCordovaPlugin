@@ -103,7 +103,6 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private int screenWidth = 1, screenHeight = 1;
 
     // Mios
-    Mat grayFrame;
     CascadeClassifier faceCascade;
     CascadeClassifier eyeCascade;
 
@@ -695,27 +694,28 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             Date current_time = new Date();
             double time_passed = Math.abs(current_time.getTime() - last_time.getTime())/1000.0;
 
-            boolean hasTriggerSet = false;
-            if(!triggers.isEmpty()){
-                hasTriggerSet = triggers.size() == trigger_size;
-            }
-
-            if(processFrames && time_passed > timeout && hasTriggerSet) {
+            if(processFrames && time_passed > timeout) {
+                Log.d(TAG, "Processing frame: "+System.currentTimeMillis());
                 if (thread_over) {
                     thread_over = false;
 
-                    if (mYuv != null) mYuv.release();
                     Camera.Parameters params = camera.getParameters();
-                    mYuv = new Mat(params.getPreviewSize().height, params.getPreviewSize().width, CvType.CV_8UC1);
+
+                    int height = params.getPreviewSize().height;
+                    int width  = params.getPreviewSize().width;
+
+                    if (mYuv != null)
+                        mYuv.release();
+                    else
+                        mYuv = new Mat(height, width, CvType.CV_8UC1);
+
                     mYuv.put(0, 0, data);
 
-                    if(grayFrame!=null)
-                        grayFrame.release();
+                    Mat mRgba_Mat = new Mat(height, width, CvType.CV_8UC4);
+                    Imgproc.cvtColor( mYuv, mRgba_Mat, Imgproc.COLOR_YUV420sp2RGBA, 4 );
 
-                    Mat grayFrame = new Mat();
-
-                    Imgproc.cvtColor(mYuv, grayFrame, Imgproc.COLOR_BGR2GRAY);
-                    Imgproc.equalizeHist(grayFrame, grayFrame);
+                    Mat grayFrame = new Mat(height, width, CvType.CV_8UC4);
+                    Imgproc.cvtColor( mRgba_Mat, grayFrame, Imgproc.COLOR_RGBA2GRAY);
 
                     processFrame(grayFrame);
                 }
@@ -735,7 +735,8 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         cordova.getThreadPool().execute(new Runnable() {
             public void run() {
-                faceCascade.detectMultiScale(grayFrame, faces, 1.1, 2, 0 | Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
+                //faceCascade.detectMultiScale(grayFrame, faces, 1.1, 2, 0 | Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
+                faceCascade.detectMultiScale(grayFrame, faces, 1.1, 2, 0 | Objdetect.CASCADE_SCALE_IMAGE, new Size(), new Size());
                 org.opencv.core.Rect[] facesArray = faces.toArray();
                 for (int i = 0; i < facesArray.length; i++)
                     Log.d(TAG, "Face detected: tl="+facesArray[i].tl()+" br="+facesArray[i].br());
