@@ -6,6 +6,7 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.content.res.AssetManager;
 import android.graphics.*;
 import android.graphics.Rect;
 import android.hardware.Camera;
@@ -47,14 +48,24 @@ import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.imgproc.Imgproc;
 import org.opencv.objdetect.CascadeClassifier;
 import org.opencv.objdetect.Objdetect;
+import org.opencv.android.CameraBridgeViewBase;
+import org.opencv.android.CameraBridgeViewBase.CvCameraViewListener2;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+
+import static android.provider.ContactsContract.CommonDataKinds.StructuredName.SUFFIX;
 
 public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder.Callback {
 
@@ -69,13 +80,14 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private Activity             activity;
     private SurfaceHolder        surfaceHolder;
     private Mat                  mYuv;
+    private Mat                  mYuvOrig;
     private Mat                  desc2;
     private FeatureDetector      orbDetector;
     private DescriptorExtractor  orbDescriptor;
     private MatOfKeyPoint        kp2;
     private MatOfDMatch          matches;
     private CallbackContext      cb;
-    private Date                 last_time;
+    private long                 last_time;
     private boolean processFrames = true, thread_over = true, debug = false,
             called_success_detection = false, called_failed_detection = true,
             previewing = false, save_files = false;
@@ -86,9 +98,9 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private List<Mat> triggers_descs = new ArrayList<>();
     private int trigger_size = -1, detected_index = -1;
 
-    private double timeout = 0.0;
+    private long timeout = 500;
     private int cameraId = -1;
-    private int mCameraIndex = CAMERA_ID_FRONT;
+    private int mCameraIndex = CAMERA_ID_ANY;
 
     private BaseLoaderCallback mLoaderCallback;
     private FrameLayout cameraFrameLayout;
@@ -103,9 +115,11 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private int screenWidth = 1, screenHeight = 1;
 
     // Mios
-    CascadeClassifier faceCascade;
-    CascadeClassifier eyeCascade;
+    private CascadeClassifier faceCascade;
+    private CascadeClassifier eyeCascade;
+    private Mat               mGrayFrame;
 
+    final private int DEFAULT_CAMERA = CAMERA_ID_FRONT;
     @SuppressWarnings("deprecation")
     private static class JavaCameraSizeAccessor implements CameraBridgeViewBase.ListItemAccessor {
 
@@ -169,15 +183,67 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         sendViewToBack(cameraFrameLayout);
 
-        setCameraIndex(CAMERA_ID_BACK);
+        setCameraIndex(DEFAULT_CAMERA);
 
-        System.loadLibrary("opencv_java3");
+        System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
 
-        faceCascade = new CascadeClassifier("resources/lbpcascades/haarcascade_frontalface_alt.xml");
-        eyeCascade = new CascadeClassifier("resources/lbpcascades/haarcascade_eye.xml");
+        AssetManager am = activity.getAssets();
 
+        try {
+            faceCascade = new CascadeClassifier(stream2file(am.open("data/haarcascades/haarcascade_frontalface_default.xml")).getPath());
+            eyeCascade = new CascadeClassifier(stream2file(am.open("data/haarcascades/haarcascade_eye.xml")).getPath());
+            Log.d(TAG, " *******************************************: Cassifiers loaded OK");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
+    public static File stream2file (InputStream in) throws IOException {
+        final String PREFIX = "idplugin";
+
+        final File tempFile = File.createTempFile(PREFIX, null);
+        tempFile.deleteOnExit();
+        OutputStream out = null;
+        try {
+            out = new FileOutputStream(tempFile);
+            copyStream(in, out);
+        } catch (Exception e) {
+            try {
+                if (out != null)
+                    out.close();
+            } catch (Exception e2) {
+            }
+            out=null;
+        }
+        return tempFile;
+    }
+
+    public static void copyStream(InputStream in, OutputStream out) throws IOException {
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            out.write(buffer, 0, read);
+        }
+    }
+
+    private void listFiles(String path) {
+        Log.d(TAG, " ******************************************* Listing files in path: "+path);
+        File folder = new File(path);
+        File[] listOfFiles = folder.listFiles();
+
+        if(listOfFiles ==  null ) {
+            Log.d(TAG, " ******************************************* NO FILES");
+            return;
+        }
+        for (int i = 0; i < listOfFiles.length; i++) {
+            if (listOfFiles[i].isFile()) {
+                Log.d(TAG, " ******************************************* File " + listOfFiles[i].getName());
+            } else if (listOfFiles[i].isDirectory()) {
+                Log.d(TAG, " ******************************************* Directory " + listOfFiles[i].getName());
+            }
+        }
+
+    }
     @Override
     public boolean execute(String action, JSONArray data,
                            CallbackContext callbackContext) throws JSONException {
@@ -261,9 +327,9 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         if(action.equals("setDetectionTimeout")) {
             Log.i(TAG, "setDetectionTimeout called");
             String message;
-            double argVal;
+            long argVal;
             try {
-                argVal = data.getDouble(0);
+                argVal = data.getLong(0);
             } catch (JSONException je) {
                 argVal = -1;
                 Log.e(TAG, je.getMessage());
@@ -285,12 +351,18 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         if(camera == null)
             return;
 
-        camera.setPreviewCallback(null);
+        File sdCard = Environment.getExternalStorageDirectory();
 
+        if(mYuv!=null)
+            Imgcodecs.imwrite(sdCard.getAbsolutePath() + "/img_yuv.jpeg", mYuv);
+
+        if(mGrayFrame!=null)
+            Imgcodecs.imwrite(sdCard.getAbsolutePath() + "/img_gray.jpeg", mGrayFrame);
+
+        camera.setPreviewCallback(null);
         camera.stopPreview();
         camera.release();
         previewing = false;
-        cameraId = -1;
         camera = null;
         setCameraBackground(true);
     }
@@ -319,9 +391,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                 surfaceHolder = surfaceView.getHolder();
                 sendViewToBack(cameraFrameLayout);
 
-                setCameraIndex(CAMERA_ID_BACK);
-                //setWhiteBackground(surfaceHolder);
-
+                setCameraIndex(DEFAULT_CAMERA);
             }
         });
     }
@@ -358,16 +428,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         called_success_detection = false;
         called_failed_detection = true;
 
-        last_time = new Date();
-/*
-        new android.os.Handler().postDelayed(
-            new Runnable() {
-                public void run() {
-                    cameraFrameLayout.setVisibility(View.VISIBLE);
-                    cameraFrameLayout.invalidate();
-                }
-            }, 2000);
-*/
+        last_time = 0;
     }
 
     public static void sendViewToBack(final View child) {
@@ -439,7 +500,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     }
 
     @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int height, int width) {
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         if(previewing){
             camera.stopPreview();
             previewing = false;
@@ -579,7 +640,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
                 if (sizes != null) {
                     /* Select the size that fits surface considering maximum size allowed */
-                    Size frameSize = calculateCameraFrameSize(sizes, new JavaCameraSizeAccessor(), height, width);
+                    Size frameSize = calculateCameraFrameSize(sizes, new JavaCameraSizeAccessor(), width, height);
 
                     params.setPreviewFormat(ImageFormat.NV21);
                     Log.d(TAG, "Set preview size to " + frameSize.width + "x" + frameSize.height);
@@ -691,58 +752,44 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         public void onPreviewFrame(byte[] data, Camera camera) {
             //Log.d(TAG, "ON Preview frame: "+System.currentTimeMillis());
 
-            Date current_time = new Date();
-            double time_passed = Math.abs(current_time.getTime() - last_time.getTime())/1000.0;
+            long current_time = System.currentTimeMillis();
+            long time_passed = current_time - last_time;
 
             if(processFrames && time_passed > timeout) {
                 Log.d(TAG, "Processing frame: "+System.currentTimeMillis());
                 if (thread_over) {
                     thread_over = false;
-
+                    //Log.d(TAG, "Processing frame inner: "+System.currentTimeMillis());
                     Camera.Parameters params = camera.getParameters();
 
                     int height = params.getPreviewSize().height;
                     int width  = params.getPreviewSize().width;
 
-                    if (mYuv != null)
-                        mYuv.release();
-                    else
-                        mYuv = new Mat(height, width, CvType.CV_8UC1);
+                    mYuvOrig = new Mat(height, width, CvType.CV_8UC1);
+                    mYuv = new Mat(width, height, CvType.CV_8UC1);
 
-                    mYuv.put(0, 0, data);
+                    mYuvOrig.put(0, 0, data);
+                    Core.transpose(mYuvOrig, mYuv);
+                    Core.flip(mYuv, mYuv, -1);
 
-                    Mat mRgba_Mat = new Mat(height, width, CvType.CV_8UC4);
-                    Imgproc.cvtColor( mYuv, mRgba_Mat, Imgproc.COLOR_YUV420sp2RGBA, 4 );
+                    final MatOfRect faces = new MatOfRect();
+                    final int absoluteFaceSize = Math.round(mYuv.height() * 0.2f);
 
-                    Mat grayFrame = new Mat(height, width, CvType.CV_8UC4);
-                    Imgproc.cvtColor( mRgba_Mat, grayFrame, Imgproc.COLOR_RGBA2GRAY);
+                    faceCascade.detectMultiScale(mYuv, faces, 1.3, 2, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
 
-                    processFrame(grayFrame);
+                    org.opencv.core.Rect[] facesArray = faces.toArray();
+                    int facesLength = facesArray.length;
+                    if (facesLength > 0)
+                        Log.d(TAG, "Faces array size: " + facesLength);
+
+                    thread_over = true;
                 }
                 //update time and reset timeout
                 last_time = current_time;
-                timeout = 0.0;
             }
 
         }
     };
-
-    final private void processFrame(final Mat grayFrame) {
-        final int absoluteFaceSize = Math.round(grayFrame.height() * 0.2f);
-
-        final MatOfRect faces = new MatOfRect();
-
-
-        cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                //faceCascade.detectMultiScale(grayFrame, faces, 1.1, 2, 0 | Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
-                faceCascade.detectMultiScale(grayFrame, faces, 1.1, 2, 0 | Objdetect.CASCADE_SCALE_IMAGE, new Size(), new Size());
-                org.opencv.core.Rect[] facesArray = faces.toArray();
-                for (int i = 0; i < facesArray.length; i++)
-                    Log.d(TAG, "Face detected: tl="+facesArray[i].tl()+" br="+facesArray[i].br());
-            }
-        });
-    }
 
     private void setBase64Pattern(JSONArray dataArray) {
         detection.clear();
