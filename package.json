@@ -1,9 +1,9 @@
 {
-  "name": "com.cloudoki.imagedetectionplugin",
-  "version": "0.0.2",
+  "name": "com.legalpin.imagedetectionplugin",
+  "version": "0.0.10",
   "description": "The ImageDetectionPlugin for Cordova enables the use of OpenCV SDK to detect an inputed image.",
   "cordova": {
-    "id": "com.cloudoki.imagedetectionplugin",
+    "id": "com.legalpin.imagedetectionplugin",
     "platforms": [
       "android",
       "ios"
@@ -11,7 +11,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Cloudoki/ImageDetectionCordovaPlugin.git"
+    "url": "git+https://github.com/legalpin/ImageDetectionCordovaPlugin.git"
   },
   "keywords": [
     "OpenCV",
@@ -30,7 +30,7 @@
   "author": "Délio Amaral",
   "license": "See License.md for details of the license",
   "bugs": {
-    "url": "https://github.com/Cloudoki/ImageDetectionCordovaPlugin/issues"
+    "url": "https://github.com/legalpin/ImageDetectionCordovaPlugin/issues"
   },
-  "homepage": "https://github.com/Cloudoki/ImageDetectionCordovaPlugin#readme"
+  "homepage": "https://github.com/legalpin/ImageDetectionCordovaPlugin#readme"
 }

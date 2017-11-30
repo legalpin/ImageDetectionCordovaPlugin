@@ -1,27 +1,13 @@
 /**
-*
-**/
+ *
+ **/
 var ImageDetectionPlugin = function () {};
 
 ImageDetectionPlugin.prototype.openCamera = function (successCallback, errorCallback) {
   cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "openCamera", []);
 };
-
 ImageDetectionPlugin.prototype.closeCamera = function (successCallback, errorCallback) {
   cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "closeCamera", []);
-};
-
-ImageDetectionPlugin.prototype.startProcessing = function (bool, successCallback, errorCallback) {
-  cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "startProcessing", [bool, window.innerHeight, window.innerWidth]);
-};
-ImageDetectionPlugin.prototype.setPatterns = function (patterns, successCallback, errorCallback) {
- var _patterns = [];
- if (!(patterns instanceof Array)){
-   _patterns.push(patterns);
- } else {
-   _patterns = patterns;
- }
- cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "setPatterns", _patterns);
 };
 ImageDetectionPlugin.prototype.isDetecting = function (successCallback, errorCallback) {
   cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "isDetecting", []);
@@ -29,8 +15,14 @@ ImageDetectionPlugin.prototype.isDetecting = function (successCallback, errorCal
 ImageDetectionPlugin.prototype.setDetectionTimeout = function (timeout, successCallback, errorCallback) {
   cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "setDetectionTimeout", [timeout]);
 };
-ImageDetectionPlugin.prototype.greet = function (name, successCallback, errorCallback) {
-  cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "greet", [name]);
+ImageDetectionPlugin.prototype.startTraining = function (faceName, successCallback, errorCallback) {
+  cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "startTraining", [faceName]);
+};
+ImageDetectionPlugin.prototype.startDetecting = function (successCallback, errorCallback) {
+  cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "startDetecting", []);
+};
+ImageDetectionPlugin.prototype.stopDetecting = function (successCallback, errorCallback) {
+  cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "stopDetecting", []);
 };
 
 if (!window.plugins) {

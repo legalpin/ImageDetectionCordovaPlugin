@@ -1,4 +1,4 @@
-package com.cloudoki.imagedetectionplugin;
+package com.legalpin.imagedetectionplugin;
 
 import android.Manifest;
 import android.app.Activity;
@@ -15,7 +15,9 @@ import android.graphics.ImageFormat;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.hardware.Camera;
+import android.os.AsyncTask;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
@@ -29,6 +31,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.Toast;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaInterface;
@@ -63,7 +66,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import com.legalpin.facelib.NativeMethods;
 
 public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder.Callback {
 
@@ -96,7 +104,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private List<Mat> triggers_descs = new ArrayList<>();
     private int trigger_size = -1, detected_index = -1;
 
-    private long timeout = 500;
+    private long timeout = 250;
     private int cameraId = -1;
     private int mCameraIndex = CAMERA_ID_ANY;
 
@@ -109,11 +117,18 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             Manifest.permission.WRITE_EXTERNAL_STORAGE
     };
 
-    private String coords;
-    private int screenWidth = 1, screenHeight = 1;
-
     // Mios
     private CascadeClassifier faceCascade;
+    private NativeMethods.TrainFacesTask mTrainFacesTask;
+    private ArrayList<Mat> imagesFaces;
+    private boolean useEigenfaces = true;
+    private ArrayList<String> imagesLabels;
+    private String[] uniqueLabels;
+    private boolean training;
+    private boolean detecting;
+
+    private int numFaces=0;
+    final private int TOTAL_FACES = 5;
 
     final private int DEFAULT_CAMERA = CAMERA_ID_FRONT;
     @SuppressWarnings("deprecation")
@@ -182,6 +197,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         setCameraIndex(DEFAULT_CAMERA);
 
         System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
+        System.loadLibrary("face-lib");
 
         AssetManager am = activity.getAssets();
 
@@ -226,81 +242,89 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                            CallbackContext callbackContext) throws JSONException {
 
         if (action.equals("openCamera")) {
+            cb = callbackContext;
+            this.processFrames = false;
+            this.training = false;
             openCamera();
+            cb.success();
+
             return true;
         }
 
         if (action.equals("closeCamera")) {
+            cb = callbackContext;
             closeCamera();
             return true;
         }
 
-        if (action.equals("greet")) {
-            Log.i(TAG, "greet called");
-            String name = data.getString(0);
-            if(name != null && !name.isEmpty()) {
-                String message = "Hello, " + name;
-                callbackContext.success(message);
-            } else {
-                callbackContext.error("");
+        if (action.equals("startTraining")) {
+            cb = callbackContext;
+            String faceName = null;
+            try {
+                faceName = data.getString(0);
+            } catch (JSONException je) {
+                Log.e(TAG, je.getMessage());
+                Log.e(TAG, " ********************************** FACE NAME ADQUISITION ERROR");
+                je.printStackTrace();
             }
+
+            if(faceName==null || "".equals(faceName)) {
+                Log.e(TAG, " ********************************** No face name");
+                //PluginResult result = new PluginResult(PluginResult.Status.ERROR);
+                //result.setKeepCallback(false);
+                //cb.sendPluginResult(result);
+                cb.error("FAIL2");
+                return true;
+            }
+
+            imagesLabels = new ArrayList<String>();
+            imagesLabels.add(faceName);
+            uniqueLabels = imagesLabels.toArray(new String[0]);
+            PluginResult pluginResult = new  PluginResult(PluginResult.Status.NO_RESULT);
+            pluginResult.setKeepCallback(true); // Keep callback
+            cb.sendPluginResult(pluginResult);
+
+            startTraining();
+
             return true;
         }
+/*
         if (action.equals("isDetecting")) {
             Log.i(TAG, "isDetecting called");
-            cb = callbackContext;
-            return true;
-        }
-        if(action.equals("setPatterns")) {
-            Log.i(TAG, "setPatterns called");
-            final JSONArray inputData = data;
-            final CallbackContext cbContext = callbackContext;
-            cordova.getThreadPool().execute(new Runnable() {
-                public void run() {
-                    // clear before adding triggers
-                    triggers.clear();
-                    triggers_kps.clear();
-                    triggers_descs.clear();
 
-                    String message = "Pattens to be set - " + inputData.length();
-                    message += "\nBefore set pattern " + triggers.size();
-                    setBase64Pattern(inputData);
-                    message += "\nAfter set pattern " + triggers.size();
-                    if(inputData.length() == triggers.size()) {
-                        trigger_size = triggers.size();
-                        message += "\nPatterns set - " + triggers.size();
-                        cbContext.success(message);
-                    } else {
-                        message += "\nOne or more patterns failed to be set.";
-                        cbContext.error(message);
-                    }
-                }
-            });
+            this.detecting=true;
+            PluginResult result = new PluginResult(PluginResult.Status.OK, this.processFrames);
+            result.setKeepCallback(false);
+            callbackContext.sendPluginResult(result);
+
             return true;
         }
-        if(action.equals("startProcessing")) {
-            Log.i(TAG, "startProcessing called");
-            String message;
-            boolean argVal;
-            try {
-                argVal = data.getBoolean(0);
-                screenHeight = data.getInt(1);
-                screenWidth = data.getInt(2);
-            } catch (JSONException je) {
-                argVal = true;
-                Log.e(TAG, je.getMessage());
-            }
-            if(argVal) {
-                processFrames = true;
-                message = "Frame processing set to 'true', screen size is h - " + screenHeight + ", w - " + screenWidth;
-                callbackContext.success(message);
-            } else {
-                processFrames = false;
-                message = "Frame processing set to 'false', screen size is h - " + screenHeight + ", w - " + screenWidth;
-                callbackContext.error(message);
-            }
+*/
+        if (action.equals("isTraining")) {
+            Log.i(TAG, "isTraining called");
+            PluginResult result = new PluginResult(PluginResult.Status.OK, this.training);
+            result.setKeepCallback(false);
+            callbackContext.sendPluginResult(result);
+
             return true;
         }
+
+        if(action.equals("startDetecting")) {
+            Log.i(TAG, "startDetecting called");
+            this.processFrames = true;
+            this.detecting=true;
+            return true;
+        }
+
+        if(action.equals("stopDetecting")) {
+            Log.i(TAG, "stopDetecting called");
+            this.processFrames = false;
+            PluginResult result = new PluginResult(PluginResult.Status.OK);
+            result.setKeepCallback(false);
+            callbackContext.sendPluginResult(result);
+            return true;
+        }
+
         if(action.equals("setDetectionTimeout")) {
             Log.i(TAG, "setDetectionTimeout called");
             String message;
@@ -323,6 +347,26 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         }
         return false;
     }
+
+    private void startTraining() {
+        Log.d(TAG, "startTraining(): Starting engaged!!!!!");
+        if(imagesFaces==null)
+            imagesFaces = new ArrayList<Mat>();
+        this.numFaces = 0;
+        this.detecting = false;
+        this.training = true;
+        this.processFrames = true;
+    }
+
+    private void startDetecting() {
+        Log.d(TAG, "startDetecting(): Starting engaged!!!!!");
+        imagesFaces = new ArrayList<Mat>();
+        this.numFaces = 0;
+        this.training = false;
+        this.detecting = true;
+        this.processFrames = true;
+    }
+
 
     private void closeCamera() {
         if(camera == null)
@@ -376,7 +420,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     {
         super.onStart();
 
-        Log.i(TAG, "onStart(): Activity starting");
+        Log.d(TAG, "onStart(): Activity starting");
 
         if(!checkCameraPermission()) {
             ActivityCompat.requestPermissions(activity,
@@ -733,8 +777,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             if(processFrames && time_passed > timeout) {
                 Log.d(TAG, "Processing frame: "+System.currentTimeMillis());
                 if (thread_over) {
-                    thread_over = false;
-                    //Log.d(TAG, "Processing frame inner: "+System.currentTimeMillis());
+                    thread_over = false;                    //Log.d(TAG, "Processing frame inner: "+System.currentTimeMillis());
                     Camera.Parameters params = camera.getParameters();
 
                     int height = params.getPreviewSize().height;
@@ -753,24 +796,39 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                     faceCascade.detectMultiScale(mYuv, faces, 1.3, 2, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
 
                     org.opencv.core.Rect[] facesArray = faces.toArray();
+
                     final int facesLength = facesArray.length;
-//                    if (facesLength > 0)
-//                        Log.d(TAG, "Faces array size: " + facesLength);
-
-                    cordova.getThreadPool().execute(new Runnable() {
-                        public void run() {
-                            try {
-                                JSONObject json = new JSONObject();
-                                json.put("faces", facesLength);
-                                PluginResult result = new PluginResult(PluginResult.Status.OK, json);
-                                result.setKeepCallback(true);
-                                cb.sendPluginResult(result);
-                            } catch (JSONException e) {
-                                e.printStackTrace();;
-                            }
+                    if (facesLength == 1) {
+                        if(training) {
+                            saveFace(mYuv);
+                            //Log.d(TAG, "Faces array size: " + facesLength);
                         }
-                    });
 
+                        if(detecting) {
+                            detectFace(mYuv);
+                            //Log.d(TAG, "Faces array size: " + facesLength);
+                        }
+
+
+                    }
+/*
+                    if(!training) {
+                        cordova.getThreadPool().execute(new Runnable() {
+                            public void run() {
+                                try {
+                                    JSONObject json = new JSONObject();
+                                    json.put("faces", facesLength);
+                                    PluginResult result = new PluginResult(PluginResult.Status.OK, json);
+                                    result.setKeepCallback(true);
+                                    cb.sendPluginResult(result);
+                                } catch (JSONException e) {
+                                    e.printStackTrace();
+                                    ;
+                                }
+                            }
+                        });
+                    }
+*/
                     thread_over = true;
                 }
                 //update time and reset timeout
@@ -780,123 +838,217 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         }
     };
 
-    private void setBase64Pattern(JSONArray dataArray) {
-        detection.clear();
-        for (int i = 0; i < dataArray.length(); i++) {
-            try {
-                detection.add(0);
-                String image_base64 = dataArray.getString(i);
-                if(image_base64 != null && !image_base64.isEmpty()) {
-                    Mat image_pattern = new Mat();
-                    MatOfKeyPoint kp1 = new MatOfKeyPoint();
-                    Mat desc1 = new Mat();
+    private void saveFace(Mat image_pattern) {
+        try {
+            Log.d(TAG, "Saving face #" + numFaces);
+            String extStorageDirectory = Environment.getExternalStorageDirectory().toString();
+            File lpinDir = new File(extStorageDirectory + "/lpin");
+            lpinDir.mkdir();
+            Imgcodecs.imwrite(extStorageDirectory + "/lpin/pic_" + this.numFaces + ".png", image_pattern);
 
-                    int limit = 400;
-                    if(image_base64.contains("data:"))
-                        image_base64 = image_base64.split(",")[1];
-                    byte[] decodedString = Base64.decode(image_base64, Base64.DEFAULT);
-                    Bitmap bitmap = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.length);
-                    Bitmap scaled = bitmap;
-                    if (bitmap.getWidth() > limit) {
-                        double scale = bitmap.getWidth() / limit;
-                        scaled = Bitmap.createScaledBitmap(bitmap, (int) (bitmap.getWidth()/scale), (int) (bitmap.getHeight()/scale), true);
-                        if (bitmap.getHeight() > limit) {
-                            scale = bitmap.getHeight() / limit;
-                            scaled = Bitmap.createScaledBitmap(bitmap, (int) (bitmap.getWidth()/scale), (int) (bitmap.getHeight()/scale), true);
-                        }
-                    }
-                    Utils.bitmapToMat(scaled, image_pattern);
-                    Imgproc.cvtColor(image_pattern, image_pattern, Imgproc.COLOR_BGR2GRAY);
-                    //Imgproc.equalizeHist(image_pattern, image_pattern);
+            Mat image = image_pattern.reshape(0, (int) image_pattern.total()); // Create column vector
+            imagesFaces.add(image);
+            if (numFaces > TOTAL_FACES) {
+                training = false;
+                trainFaces();
+            } else {
+                JSONObject json = new JSONObject();
+                json.put("numFaces", numFaces);
+                json.put("totalFaces", TOTAL_FACES);
 
-                    if(save_files) {
-                        Utils.matToBitmap(image_pattern, scaled);
-                        String extStorageDirectory = Environment.getExternalStorageDirectory().toString();
-                        int num = (int) (Math.random() * 10001);
-                        Imgcodecs.imwrite(extStorageDirectory + "/pic" + num + ".png", image_pattern);
-                        Log.i("### FILE ###", "File saved to " + extStorageDirectory + "/pic" + num + ".png");
-                    }
-
-                    orbDetector.detect(image_pattern, kp1);
-                    orbDescriptor.compute(image_pattern, kp1, desc1);
-
-                    triggers.add(image_pattern);
-                    triggers_kps.add(kp1);
-                    triggers_descs.add(desc1);
-                }
-            } catch (JSONException e) {
-                // do nothing
+                PluginResult result = new PluginResult(PluginResult.Status.OK, json);
+                result.setKeepCallback(true);
+                cb.sendPluginResult(result);
             }
+            numFaces++;
+        } catch (Exception e) {
+            //PluginResult result = new PluginResult(PluginResult.Status.ERROR);
+            //result.setKeepCallback(false);
+            //cb.sendPluginResult(result);
+            cb.error(e.getClass().getName()+": "+e.getMessage());
         }
     }
 
-    private void updateState(boolean state, int _index) {
-        final int index = _index;
+    /**
+     * Train faces using stored images.
+     * @return  Returns false if the task is already running.
+     */
+    private boolean trainFaces() {
+        Log.d(TAG, " ******************************************************* trainFaces(): CALLED");
+        if (imagesFaces.isEmpty())
+            return true; // The array might be empty if the method is changed in the OnClickListener
 
-        int detection_limit = 6;
+        if (mTrainFacesTask != null && mTrainFacesTask.getStatus() != AsyncTask.Status.FINISHED) {
+            Log.i(TAG, "mTrainFacesTask is still running");
+            return false;
+        }
 
-        if(state) {
-            try {
-                int result = detection.get(_index) + 1;
-                if(result < detection_limit) {
-                    detection.set(_index, result);
-                }
-            } catch (IndexOutOfBoundsException ibe){
-//                 detection.add(_index, 1);
-            }
+        Mat imagesMatrix = new Mat((int) imagesFaces.get(0).total(), imagesFaces.size(), imagesFaces.get(0).type());
+        for (int i = 0; i < imagesFaces.size(); i++)
+            imagesFaces.get(i).copyTo(imagesMatrix.col(i)); // Create matrix where each image is represented as a column vector
+
+        Log.d(TAG, "Images height: " + imagesMatrix.height() + " Width: " + imagesMatrix.width() + " total: " + imagesMatrix.total());
+
+        // Train the face recognition algorithms in an asynchronous task, so we do not skip any frames
+        if (useEigenfaces) {
+            Log.i(TAG, "Training Eigenfaces");
+
+            mTrainFacesTask = new NativeMethods.TrainFacesTask(imagesMatrix, trainFacesTaskCallback);
         } else {
-            for (int i = 0; i < triggers.size(); i++) {
-                try {
-                    int result = detection.get(i) - 1;
-                    if(result < 0) {
-                        detection.set(_index, 0);
-                    } else {
-                        detection.set(_index, result);
+            Log.i(TAG, "Training Fisherfaces");
+
+            Set<String> uniqueLabelsSet = new HashSet<>(imagesLabels); // Get all unique labels
+            uniqueLabels = uniqueLabelsSet.toArray(new String[uniqueLabelsSet.size()]); // Convert to String array, so we can read the values from the indices
+
+            int[] classesNumbers = new int[uniqueLabels.length];
+            for (int i = 0; i < classesNumbers.length; i++)
+                classesNumbers[i] = i + 1; // Create incrementing list for each unique label starting at 1
+
+            int[] classes = new int[imagesLabels.size()];
+            for (int i = 0; i < imagesLabels.size(); i++) {
+                String label = imagesLabels.get(i);
+                for (int j = 0; j < uniqueLabels.length; j++) {
+                    if (label.equals(uniqueLabels[j])) {
+                        classes[i] = classesNumbers[j]; // Insert corresponding number
+                        break;
                     }
-                } catch (IndexOutOfBoundsException ibe){
-//                    detection.add(i, 0);
                 }
             }
-        }
 
-        if (getState(_index) && called_failed_detection && !called_success_detection) {
-            cordova.getThreadPool().execute(new Runnable() {
-                public void run() {
-                    PluginResult result = new PluginResult(PluginResult.Status.OK, "{\"message\":\"pattern detected\", \"index\":" + index + ", " + coords + "}");
-                    result.setKeepCallback(true);
-                    cb.sendPluginResult(result);
-                }
-            });
-            called_success_detection = true;
-            called_failed_detection = false;
-            detected_index = _index;
-        }
+            /*for (int i = 0; i < imagesLabels.size(); i++)
+                Log.i(TAG, "Classes: " + imagesLabels.get(i) + " = " + classes[i]);*/
 
-        boolean valid_index = detected_index == _index;
+            Mat vectorClasses = new Mat(classes.length, 1, CvType.CV_32S); // CV_32S == int
+            vectorClasses.put(0, 0, classes); // Copy int array into a vector
 
-        if (!getState(_index) && !called_failed_detection && called_success_detection && valid_index) {
-            cordova.getThreadPool().execute(new Runnable() {
-                public void run() {
-                    PluginResult result = new PluginResult(PluginResult.Status.ERROR, "{\"message\":\"pattern not detected\"}");
-                    result.setKeepCallback(true);
-                    cb.sendPluginResult(result);
-                }
-            });
-            called_success_detection = false;
-            called_failed_detection = true;
+            mTrainFacesTask = new NativeMethods.TrainFacesTask(imagesMatrix, vectorClasses, trainFacesTaskCallback);
         }
+        mTrainFacesTask.execute();
+
+        return true;
     }
 
-    private boolean getState(int index) {
-        int total;
-        int detection_thresh = 3;
+    private NativeMethods.TrainFacesTask.Callback trainFacesTaskCallback = new NativeMethods.TrainFacesTask.Callback() {
+        @Override
+        public void onTrainFacesComplete(boolean result) {
+            if (result) {
+                Log.d(TAG, "Training complete");
 
-        total = detection.get(index);
+                PluginResult pluginResult = new PluginResult(PluginResult.Status.OK);
+                pluginResult.setKeepCallback(false);
+                cb.sendPluginResult(pluginResult);
+            } else {
+                Log.d(TAG, "Training failed");
+                PluginResult pluginResult = new PluginResult(PluginResult.Status.ERROR);
+                pluginResult.setKeepCallback(false);
+                cb.sendPluginResult(pluginResult);
+            }
+        }
+    };
 
-        if(debug) {
-            Log.i("## GET STATE RESULT ##", " state -> " + total);
+
+    public void detectFace(Mat mGray) {
+        Log.d(TAG, " ************************************************ detectFace() called!!!!!!!!!!!!!");
+        NativeMethods.MeasureDistTask mMeasureDistTask = null;
+
+        if (mMeasureDistTask != null && mMeasureDistTask.getStatus() != AsyncTask.Status.FINISHED) {
+            Log.d(TAG, "mMeasureDistTask is still running");
+            return;
+        }
+        if (mTrainFacesTask != null && mTrainFacesTask.getStatus() != AsyncTask.Status.FINISHED) {
+            Log.d(TAG, "mTrainFacesTask is still running");
+            return;
         }
 
-        return total >= detection_thresh;
+        Log.d(TAG, "Gray height: " + mGray.height() + " Width: " + mGray.width() + " total: " + mGray.total());
+        if (mGray.total() == 0)
+            return;
+
+        //Size imageSize = new Size(200, 200.0f / ((float) mGray.width() / (float) mGray.height())); // Scale image in order to decrease computation time
+        //Imgproc.resize(mGray, mGray, imageSize);
+
+        Log.d(TAG, "Small gray height: " + mGray.height() + " Width: " + mGray.width() + " total: " + mGray.total());
+        //SaveImage(mGray);
+
+        Mat image = mGray.reshape(0, (int) mGray.total()); // Create column vector
+        Log.d(TAG, "Vector height: " + image.height() + " Width: " + image.width() + " total: " + image.total());
+/*
+        images.add(image); // Add current image to the array
+
+        if (images.size() > maximumImages) {
+            images.remove(0); // Remove first image
+            imagesLabels.remove(0); // Remove first label
+            Log.i(TAG, "The number of images is limited to: " + images.size());
+        }
+*/
+        // Calculate normalized Euclidean distance
+        mMeasureDistTask = new NativeMethods.MeasureDistTask(useEigenfaces, measureDistTaskCallback);
+        mMeasureDistTask.execute(image);
+        //mMeasureDistTask.execute(mGray);
+
+        //showLabelsDialog();
+    }
+
+
+    private NativeMethods.MeasureDistTask.Callback measureDistTaskCallback = new NativeMethods.MeasureDistTask.Callback() {
+        @Override
+        public void onMeasureDistComplete(Bundle bundle) {
+            if (bundle == null) {
+                Log.d(TAG, "Failed to measure distance: "+ Toast.LENGTH_LONG);
+                return;
+            }
+
+            Log.d(TAG, "Measure distance callback: "+ bundle.toString());
+            double faceThreshold = 0.020;
+            double distanceThreshold = 0.020;
+
+
+            float minDist = bundle.getFloat(NativeMethods.MeasureDistTask.MIN_DIST_FLOAT);
+            if (minDist != -1) {
+                int minIndex = bundle.getInt(NativeMethods.MeasureDistTask.MIN_DIST_INDEX_INT);
+                float faceDist = bundle.getFloat(NativeMethods.MeasureDistTask.DIST_FACE_FLOAT);
+                if (imagesLabels.size() > minIndex) { // Just to be sure
+                    Log.i(TAG, "dist[" + minIndex + "]: " + minDist + ", face dist: " + faceDist + ", label: " + imagesLabels.get(minIndex));
+
+                    String minDistString = String.format(Locale.US, "%.4f", minDist);
+                    String faceDistString = String.format(Locale.US, "%.4f", faceDist);
+
+                    if (faceDist < faceThreshold && minDist < distanceThreshold) {// 1. Near face space and near a face class
+                        Log.d(TAG, "Face detected: " + imagesLabels.get(minIndex) + ". Distance: " + minDistString);
+                        sendFinalResult("Face detected");
+                    } else if (faceDist < faceThreshold) { // 2. Near face space but not near a known face class
+                        Log.d(TAG, "Unknown face. Face distance: " + faceDistString + ". Closest Distance: " + minDistString);
+                        sendFinalResult("Unknown face");
+                    } else if (minDist < distanceThreshold) { // 3. Distant from face space and near a face class
+                        Log.d(TAG, "False recognition. Face distance: " + faceDistString + ". Closest Distance: " + minDistString);
+                        sendFinalResult("False recognition");
+                    } else {// 4. Distant from face space and not near a known face class.
+                        Log.d(TAG, "Image is not a face. Face distance: " + faceDistString + ". Closest Distance: " + minDistString);
+                        sendFinalResult("False face");
+                    }
+                }
+            } else {
+                Log.w(TAG, "Array is null");
+                if (useEigenfaces || uniqueLabels == null || uniqueLabels.length > 1)
+                    Log.d(TAG, "Keep training...");
+                else
+                    Log.d(TAG, "Fisherfaces needs two different faces");
+            }
+        }
+    };
+
+    private void sendFinalResult(String result) {
+        PluginResult pluginResult = null;
+        try {
+            JSONObject json = new JSONObject();
+            json.put("result", result);
+            pluginResult = new PluginResult(PluginResult.Status.OK, json);
+        } catch (JSONException e) {
+            e.printStackTrace();
+            pluginResult = new PluginResult(PluginResult.Status.OK);
+        }
+
+        pluginResult.setKeepCallback(false);
+        cb.sendPluginResult(pluginResult);
     }
 }
