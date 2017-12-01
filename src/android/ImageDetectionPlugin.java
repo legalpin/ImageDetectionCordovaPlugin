@@ -76,7 +76,7 @@ import com.legalpin.facelib.NativeMethods;
 public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder.Callback {
 
     private static final String  TAG = "OpenCV::Activity";
-    private static final int     REQUEST_CAMERA_PERMISSIONS = 133;
+    private static final int REQUEST_CAMERA_PERMISSIONS = 133;
     private static final int CAMERA_ID_ANY   = -1;
     private static final int CAMERA_ID_BACK  = 99;
     private static final int CAMERA_ID_FRONT = 98;
@@ -87,22 +87,10 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private SurfaceHolder        surfaceHolder;
     private Mat                  mYuv;
     private Mat                  mYuvOrig;
-    private Mat                  desc2;
-    private FeatureDetector      orbDetector;
-    private DescriptorExtractor  orbDescriptor;
-    private MatOfKeyPoint        kp2;
-    private MatOfDMatch          matches;
     private CallbackContext      cb;
     private long                 last_time;
-    private boolean processFrames = true, thread_over = true, debug = false,
-            called_success_detection = false, called_failed_detection = true,
+    private boolean processFrames = true, thread_over = true,
             previewing = false, save_files = false;
-    private List<Integer> detection = new ArrayList<>();
-
-    private List<Mat> triggers = new ArrayList<>();
-    private List<MatOfKeyPoint> triggers_kps = new ArrayList<>();
-    private List<Mat> triggers_descs = new ArrayList<>();
-    private int trigger_size = -1, detected_index = -1;
 
     private long timeout = 250;
     private int cameraId = -1;
@@ -121,14 +109,14 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private CascadeClassifier faceCascade;
     private NativeMethods.TrainFacesTask mTrainFacesTask;
     private ArrayList<Mat> imagesFaces;
-    private boolean useEigenfaces = true;
+    private boolean useEigenfaces = false;
     private ArrayList<String> imagesLabels;
     private String[] uniqueLabels;
     private boolean training;
     private boolean detecting;
 
     private int numFaces=0;
-    final private int TOTAL_FACES = 5;
+    final private int TOTAL_FACES = 20;
 
     final private int DEFAULT_CAMERA = CAMERA_ID_FRONT;
     @SuppressWarnings("deprecation")
@@ -443,10 +431,6 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         }
 
         thread_over = true;
-        debug = false;
-        called_success_detection = false;
-        called_failed_detection = true;
-
         last_time = 0;
     }
 
@@ -510,12 +494,6 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        matches = new MatOfDMatch();
-        orbDetector = FeatureDetector.create(FeatureDetector.ORB);
-        orbDescriptor = DescriptorExtractor.create(DescriptorExtractor.ORB);
-        kp2 = new MatOfKeyPoint();
-        desc2 = new Mat();
-        //setWhiteBackground(holder);
     }
 
     @Override
@@ -777,7 +755,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             if(processFrames && time_passed > timeout) {
                 Log.d(TAG, "Processing frame: "+System.currentTimeMillis());
                 if (thread_over) {
-                    thread_over = false;                    //Log.d(TAG, "Processing frame inner: "+System.currentTimeMillis());
+                    thread_over = false;
                     Camera.Parameters params = camera.getParameters();
 
                     int height = params.getPreviewSize().height;
@@ -790,15 +768,22 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                     Core.transpose(mYuvOrig, mYuv);
                     Core.flip(mYuv, mYuv, -1);
 
-                    final MatOfRect faces = new MatOfRect();
-                    final int absoluteFaceSize = Math.round(mYuv.height() * 0.2f);
+                    int minDimension = height > width ? width : height;
 
-                    faceCascade.detectMultiScale(mYuv, faces, 1.3, 2, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
+                    final MatOfRect faces = new MatOfRect();
+                    final int absoluteFaceSize = Math.round(minDimension * 0.5f);
+                    final int minValidFaceSize = Math.round(minDimension * 0.75f);
+
+                    //faceCascade.detectMultiScale(mYuv, faces, 1.3, 2, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
+                    faceCascade.detectMultiScale(mYuv, faces, 1.3, 5, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
 
                     org.opencv.core.Rect[] facesArray = faces.toArray();
 
                     final int facesLength = facesArray.length;
-                    if (facesLength == 1) {
+                    if (facesLength == 1 && facesArray[0].height >= minValidFaceSize) {
+                        org.opencv.core.Rect face = facesArray[0];
+                        Log.d(TAG,"FACE CASCADE CLASSIFIER OK!: IH:"+mYuv.height()+"AFS:" +absoluteFaceSize+" H:"+face.height+" W:"+face.width);
+
                         if(training) {
                             saveFace(mYuv);
                             //Log.d(TAG, "Faces array size: " + facesLength);
@@ -808,8 +793,6 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                             detectFace(mYuv);
                             //Log.d(TAG, "Faces array size: " + facesLength);
                         }
-
-
                     }
 /*
                     if(!training) {
@@ -847,19 +830,23 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             Imgcodecs.imwrite(extStorageDirectory + "/lpin/pic_" + this.numFaces + ".png", image_pattern);
 
             Mat image = image_pattern.reshape(0, (int) image_pattern.total()); // Create column vector
-            imagesFaces.add(image);
-            if (numFaces > TOTAL_FACES) {
+
+
+            if (imagesFaces.size() >= TOTAL_FACES) {
                 training = false;
                 trainFaces();
-            } else {
-                JSONObject json = new JSONObject();
-                json.put("numFaces", numFaces);
-                json.put("totalFaces", TOTAL_FACES);
-
-                PluginResult result = new PluginResult(PluginResult.Status.OK, json);
-                result.setKeepCallback(true);
-                cb.sendPluginResult(result);
+                return;
             }
+
+            JSONObject json = new JSONObject();
+            json.put("numFaces", numFaces+1);
+            json.put("totalFaces", TOTAL_FACES);
+
+            PluginResult result = new PluginResult(PluginResult.Status.OK, json);
+            result.setKeepCallback(true);
+            cb.sendPluginResult(result);
+            imagesFaces.add(image);
+
             numFaces++;
         } catch (Exception e) {
             //PluginResult result = new PluginResult(PluginResult.Status.ERROR);
@@ -874,6 +861,17 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
      * @return  Returns false if the task is already running.
      */
     private boolean trainFaces() {
+        try {
+            JSONObject json = new JSONObject();
+            json.put("processingImages","Y");
+
+            PluginResult result = new PluginResult(PluginResult.Status.OK, json);
+            result.setKeepCallback(true);
+            cb.sendPluginResult(result);
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+
         Log.d(TAG, " ******************************************************* trainFaces(): CALLED");
         if (imagesFaces.isEmpty())
             return true; // The array might be empty if the method is changed in the OnClickListener
@@ -896,7 +894,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             mTrainFacesTask = new NativeMethods.TrainFacesTask(imagesMatrix, trainFacesTaskCallback);
         } else {
             Log.i(TAG, "Training Fisherfaces");
-
+/*
             Set<String> uniqueLabelsSet = new HashSet<>(imagesLabels); // Get all unique labels
             uniqueLabels = uniqueLabelsSet.toArray(new String[uniqueLabelsSet.size()]); // Convert to String array, so we can read the values from the indices
 
@@ -913,6 +911,14 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                         break;
                     }
                 }
+            }
+*/
+
+            int[] classes = new int[imagesFaces.size()];
+            for (int i = 0; i < imagesFaces.size(); i++) {
+                int classNumber = (i/5)+1;
+                Log.d(TAG, "Image: "+i+" class: "+classNumber);
+                classes[i] = classNumber; // Insert corresponding number
             }
 
             /*for (int i = 0; i < imagesLabels.size(); i++)
@@ -999,22 +1005,23 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             }
 
             Log.d(TAG, "Measure distance callback: "+ bundle.toString());
-            double faceThreshold = 0.020;
-            double distanceThreshold = 0.020;
-
+            double faceThreshold = 0.031;
+            double distanceThreshold = 0.0045;
 
             float minDist = bundle.getFloat(NativeMethods.MeasureDistTask.MIN_DIST_FLOAT);
             if (minDist != -1) {
                 int minIndex = bundle.getInt(NativeMethods.MeasureDistTask.MIN_DIST_INDEX_INT);
                 float faceDist = bundle.getFloat(NativeMethods.MeasureDistTask.DIST_FACE_FLOAT);
-                if (imagesLabels.size() > minIndex) { // Just to be sure
-                    Log.i(TAG, "dist[" + minIndex + "]: " + minDist + ", face dist: " + faceDist + ", label: " + imagesLabels.get(minIndex));
+                //if (imagesLabels.size() > minIndex) { // Just to be sure
+                    //Log.i(TAG, "dist[" + minIndex + "]: " + minDist + ", face dist: " + faceDist + ", label: " + imagesLabels.get(minIndex));
+                    Log.i(TAG, "dist[" + minIndex + "]: " + minDist + ", face dist: " + faceDist + ", minIndex: " + minIndex);
 
                     String minDistString = String.format(Locale.US, "%.4f", minDist);
                     String faceDistString = String.format(Locale.US, "%.4f", faceDist);
 
                     if (faceDist < faceThreshold && minDist < distanceThreshold) {// 1. Near face space and near a face class
-                        Log.d(TAG, "Face detected: " + imagesLabels.get(minIndex) + ". Distance: " + minDistString);
+                        //Log.d(TAG, "Face detected: " + imagesLabels.get(minIndex) + ". Distance: " + minDistString);
+                        Log.d(TAG, " ******************************************************************************* Face detected: minIndex: " + minIndex + ". Distance: " + minDistString);
                         sendFinalResult("Face detected");
                     } else if (faceDist < faceThreshold) { // 2. Near face space but not near a known face class
                         Log.d(TAG, "Unknown face. Face distance: " + faceDistString + ". Closest Distance: " + minDistString);
@@ -1026,7 +1033,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                         Log.d(TAG, "Image is not a face. Face distance: " + faceDistString + ". Closest Distance: " + minDistString);
                         sendFinalResult("False face");
                     }
-                }
+                //}
             } else {
                 Log.w(TAG, "Array is null");
                 if (useEigenfaces || uniqueLabels == null || uniqueLabels.length > 1)
