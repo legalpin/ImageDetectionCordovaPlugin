@@ -14,7 +14,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.PixelFormat;
-import android.graphics.Rect;
 import android.hardware.Camera;
 import android.os.AsyncTask;
 import android.os.Build;
@@ -51,11 +50,13 @@ import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfDMatch;
+import org.opencv.core.MatOfDouble;
 import org.opencv.core.MatOfKeyPoint;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.MatOfRect;
 import org.opencv.core.Point;
+import org.opencv.core.Rect;
 import org.opencv.core.RotatedRect;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
@@ -80,6 +81,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.function.Predicate;
 
+import com.googlecode.tesseract.android.TessBaseAPI;
 import com.legalpin.facelib.NativeMethods;
 
 import static org.opencv.imgproc.Imgproc.THRESH_BINARY;
@@ -144,6 +146,9 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private static final int PROCESS_MODE_RECOG_FACE  = 3;
     private static final int PROCESS_MODE_FRONT_ID    = 4;
     private static final int PROCESS_MODE_BACK_ID     = 5;
+
+
+    private TessBaseAPI tessBaseApi;
 
     final private int DEFAULT_CAMERA = CAMERA_ID_FRONT;
     @SuppressWarnings("deprecation")
@@ -213,6 +218,10 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
         System.loadLibrary("face-lib");
+        System.loadLibrary("tess");
+        System.loadLibrary("lept");
+        System.loadLibrary("jpgt");
+        System.loadLibrary("pngt");
 
         AssetManager am = activity.getAssets();
 
@@ -715,7 +724,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             }
         }
 
-        Rect rect = surfaceHolder.getSurfaceFrame();
+        android.graphics.Rect rect = surfaceHolder.getSurfaceFrame();
         initializeCamera(rect.height(), rect.width());
         if(camera != null) {
             try {
@@ -866,12 +875,12 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                     int height = params.getPreviewSize().height;
                     int width  = params.getPreviewSize().width;
 
-                    mYuvOrig = new Mat(height, width, CvType.CV_8UC3);
-                    saveImg("test1.jpeg", mYuvOrig);
+                    mYuvOrig = new Mat(height, width, CvType.CV_8UC1);
                     mYuv = new Mat(width, height, CvType.CV_8UC1);
 
                     mYuvOrig.put(0, 0, data);
-
+                    
+                    saveImg("test1.jpeg", mYuvOrig);
                     if(training || detectingFace) {
                         Core.transpose(mYuvOrig, mYuv);
                         Core.flip(mYuv, mYuv, -1);
@@ -1064,9 +1073,9 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         //mMeasureDistTask.execute(mGray);
     }
 
-
     public void detectDocumentFront(Mat mGray) {
         //Log.d(TAG, "detectDocumentFront() called");
+
         double ratio = mGray.rows() / (double) mGray.cols();
         //Log.d(TAG, "detectDocumentFront(): ratio: "+ratio);
         int RESIZE = 500;
@@ -1084,66 +1093,210 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         Size sz = new Size(newHeight, newWidth);
         Imgproc.resize( mGray, mSmall, sz );
 
-        Mat mCanny = getEdgesFromImage(mSmall);
-        MatOfPoint2f contours = findContours(mCanny);
-        if(contours==null)
+        double sharpness = getSharpness(mGray);
+        Log.d(TAG, "Image sharpness: "+sharpness);
+
+        if(sharpness < 110) {
+            Log.d(TAG, "Blurry image not valid");
             return;
+        }
+
+        Mat mCanny = getEdgesFromImage(mSmall);
+        MatOfPoint2f contoursSmall = findContours(mCanny);
+        if(contoursSmall == null)
+            return;
+
+        MatOfPoint2f contoursOK = correctPerspective(contoursSmall, mSmall.size());
+        if(contoursOK.get(0,0)[0]!=contoursSmall.get(0,0)[0] ||
+                contoursOK.get(0,0)[1]!=contoursSmall.get(0,0)[1])
+            Log.d(TAG, " ********************************** PERSPECTIVE CORRECTION contoursSmall: "+getContourToString(contoursSmall)+" contoursOK: "+getContourToString(contoursOK));
+
+        MatOfPoint2f bigContours = recalculateContours(mSmall.size(), mGray.size(), contoursOK);
 
         //Log.d(TAG, "detectDocumentFront(): rectangle detected");
-        Mat mWarped = applyTransformationRotation(mSmall, contours);
-        if(mWarped==null)
+
+        Mat mWarpedSmall = applyTransformationRotation(mSmall, contoursOK);
+        if(mWarpedSmall==null) {
+            Log.d(TAG, "No contours found!");
             return;
+        }
+
+        Mat mWarpedBig = applyTransformationRotation(mGray, bigContours);
 
         //double angle1 = computeSkew(mWarped, 32);
-
-
+/*
         List<Double> lAngle = new ArrayList();
 
         for(int i = 96; i <= 192; i += 8)
             lAngle.add(computeSkew(mWarped, i));
 
         double bestAngle = selectBestAngle(lAngle);
-        for(int j = 0; j<lAngle.size();j++)
-            Log.d(TAG, "Skew angle[" + j + "]: " + lAngle.get(j));
+*/
+//        for(int j = 0; j<lAngle.size();j++)
+//            Log.d(TAG, "Skew angle[" + j + "]: " + lAngle.get(j));
 
-        Log.d(TAG, "Best angle: " + bestAngle);
-        Mat mDeskewed = deskew(mWarped, bestAngle);
+//        Log.d(TAG, "Best angle: " + bestAngle);
+        //Mat mDeskewed = deskew(mWarped, bestAngle);
 
         saveImg("x1.jpeg", mGray);
         saveImg("x2.jpeg", mSmall);
         saveImg("x3.jpeg", mCanny);
-        saveImg("x4.jpeg", mWarped);
-        saveImg("x5.jpeg", mDeskewed);
+        saveImg("x4.jpeg", mWarpedSmall);
+        saveImg("x5.jpeg", mWarpedBig);
 
-        detectMRZ(mDeskewed);
+        Rect rectSmall = detectMRZ(mWarpedSmall);
+        if(rectSmall!=null) {
+            Rect rectBig = recalculateRect(mWarpedSmall.size(), mWarpedBig.size(), rectSmall);
+
+            if (rectSmall != null) {
+                String text = getImageToString(mWarpedBig, rectBig);
+
+                Log.d(TAG, "TEXTO EXTRAIDO:\n" + text);
+            }
+        }
     }
 
+    private double getSharpness(Mat matGray) {
+        Mat destination = new Mat();
+        //Mat matGray=new Mat();
+
+        //Imgproc.cvtColor(image, matGray, Imgproc.COLOR_BGR2GRAY);
+        Imgproc.Laplacian(matGray, destination, 3);
+        MatOfDouble median = new MatOfDouble();
+        MatOfDouble std= new MatOfDouble();
+        Core.meanStdDev(destination, median , std);
+
+        return Math.pow(std.get(0,0)[0],2);
+    }
+
+    private Rect recalculateRect(Size org, Size dst, Rect orgRect) {
+
+        double ratioX = dst.height / org.height;
+        double ratioY = dst.width / org.width;
+
+
+        Rect dstRect = new Rect();
+        dstRect.x = (int) (orgRect.x * ratioX);
+        dstRect.y = (int) (orgRect.y * ratioY);
+
+        dstRect.width = (int) (orgRect.width * ratioX);
+        dstRect.height = (int) (orgRect.height * ratioY);
+
+
+        Log.d(TAG, "Size: ORG: W: "+org.width+" H: "+org.height+" DST: W: "+dst.width+" H: "+dst.height);
+
+        Log.d(TAG, "recalculateRect: ("+orgRect.x+","+orgRect.y+"),("+(orgRect.x+orgRect.width)+","+(orgRect.y+orgRect.height)+") ->  ("+dstRect.x+","+dstRect.y+"),("+(dstRect.x+dstRect.width)+","+(dstRect.y+dstRect.height)+")");
+
+        return dstRect;
+    }
+
+    private MatOfPoint2f recalculateContours(Size sOrg, Size sDst, MatOfPoint2f contours) {
+
+        final double srcHeight = sOrg.height;
+        final double srcWidth = sOrg.width;
+
+        final double dstHeight = sDst.height;
+        final double dstWidth = sDst.width;
+
+        final double ratioX = dstWidth / srcWidth;
+        final double ratioY = dstHeight / srcHeight;
+
+        final List<Point> lDstContours = new ArrayList();
+
+        for(Point p : contours.toArray())
+            lDstContours.add(new Point(ratioX * p.x, ratioY * p.y));
+
+        final MatOfPoint2f result = new MatOfPoint2f();
+        result.fromList(lDstContours);
+
+        return result;
+    }
+
+    private String getImageToString(Mat image, Rect rect) {
+        Mat image_roi = new Mat(image, rect);
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = 1; // 1 - means max size. 4 - means maxsize/4 size. Don't use value <4, because you need more memory in the heap to store your data.
+        saveImg("temp.jpeg", image_roi);
+
+        File sdCard = Environment.getExternalStorageDirectory();
+
+        Bitmap bitmap = BitmapFactory.decodeFile(sdCard.getPath()+"/temp.jpeg", options);
+
+        return extractText(bitmap);
+    }
+
+    private String extractText(Bitmap bitmap) {
+        try {
+            tessBaseApi = new TessBaseAPI();
+        } catch (Exception e) {
+            Log.e(TAG, e.getMessage());
+            if (tessBaseApi == null) {
+                Log.e(TAG, "TessBaseAPI is null. TessFactory not returning tess object.");
+            }
+        }
+/*
+File outputDir = context.getCacheDir(); // context being the Activity pointer
+File outputFile = File.createTempFile("prefix", "extension", outputDir);
+ */
+
+        tessBaseApi.init(Environment.getExternalStorageDirectory().getAbsolutePath(), "eng");
+//       //EXTRA SETTINGS
+//        //For example if we only want to detect numbers
+//        tessBaseApi.setVariable(TessBaseAPI.VAR_CHAR_WHITELIST, "1234567890");
+//
+//        //blackList Example
+//        tessBaseApi.setVariable(TessBaseAPI.VAR_CHAR_BLACKLIST, "!@#$%^&*()_+=-qwertyuiop[]}{POIU" +
+//                "YTRWQasdASDfghFGHjklJKLl;L:'\"\\|~`xcvXCVbnmBNM,./<>?");
+
+        Log.d(TAG, "Training file loaded");
+        tessBaseApi.setImage(bitmap);
+        String extractedText = "empty result";
+        try {
+            extractedText = tessBaseApi.getUTF8Text();
+        } catch (Exception e) {
+            Log.e(TAG, "Error in recognizing text.");
+        }
+        tessBaseApi.end();
+        return extractedText;
+    }
+
+
     private Rect detectMRZ(Mat image) {
-        Log.d(TAG, "X1");
+        saveImg("test2.jpeg",image);
+        //Log.d(TAG, "X1");
         Mat rectKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(13,5));
         Mat sqKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(21,21));
-        Log.d(TAG, "X2");
+        //Log.d(TAG, "X2");
         //Mat gray = new Mat(image.rows(), image.cols(), image.type());
         //Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY);
-        Log.d(TAG, "X3");
+        //Log.d(TAG, "X3");
         Mat gray = image.clone();
         Imgproc.GaussianBlur(gray, gray, new Size(3,3),0);
         Mat blackhat = new Mat();
         Imgproc.morphologyEx(gray, blackhat, Imgproc.MORPH_BLACKHAT, rectKernel);
-        Log.d(TAG, "X4");
+        //Log.d(TAG, "X4");
         Mat gradX = new Mat(1,1,CvType.CV_8UC1);
         Imgproc.Sobel(blackhat, gradX, CvType.CV_8UC1, 1,0); // -1
-        Log.d(TAG, "X5");
+        //Log.d(TAG, "X5");
 
-        absoluteMat(gradX, gradX);
+        Core.absdiff(gradX, new Scalar(0), gradX);
+        //absoluteMat(gradX, gradX);
+        Core.MinMaxLocResult mmlr = Core.minMaxLoc(gradX);
+
+                /*
         double minVal = minMat(gradX);
         double maxVal = maxMat(gradX);
-        Log.d(TAG, "X6");
 
-        gradMinMax(gradX, minVal, maxVal);
+        */
+        //Log.d(TAG, "X6");
+
+
+        //gradMinMax(gradX, gradX, minVal, maxVal);
+        gradMinMax(gradX, gradX, mmlr.minVal, mmlr.maxVal);
 
         Mat thres = gradX.clone();
-        Log.d(TAG, "X7");
+        //Log.d(TAG, "X7");
         Imgproc.morphologyEx(gradX, gradX, Imgproc.MORPH_CLOSE, rectKernel);
         Imgproc.threshold(gradX, thres, 0, 255, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
 
@@ -1152,9 +1305,9 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         Imgproc.erode(thres, thres, element);
 
         List<MatOfPoint> cnts = new ArrayList();
-        Log.d(TAG, "X8");
+        //Log.d(TAG, "X8");
         Imgproc.findContours(thres.clone(),  cnts, new Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
-        Log.d(TAG, "X9");
+        //Log.d(TAG, "X9");
         cnts.sort(new Comparator<MatOfPoint>() {
             public int compare(MatOfPoint mop1, MatOfPoint mop2) {
                 double aMop1 = Imgproc.contourArea(mop1);
@@ -1168,10 +1321,10 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                 return 0;
             }
         });
-        Log.d(TAG, "X10");
+        //Log.d(TAG, "X10");
         Rect result = null;
         for(MatOfPoint c : cnts) {
-            org.opencv.core.Rect rect = Imgproc.boundingRect(c);
+            Rect rect = Imgproc.boundingRect(c);
             Point p = rect.tl();
             double x = p.x;
             double y = p.y;
@@ -1180,89 +1333,111 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             double ar = w / h;
             double crWidth = w / gray.cols();
 
+            Log.d(TAG, "ar: "+ar+" crWidth: "+crWidth);
             if(ar > 5 && crWidth > 0.75) {
                 int pX = (int) ((x + w) * 0.03);
                 int pY = (int) ((y + h) * 0.03);
+
                 x = x - pX;
                 y = y - pY;
                 w = w + (pX * 2);
                 h = h + (pY * 2);
 
-                result = new Rect((int) x, (int) y,  (int) (x + w),  (int) (y + h));
+                x = (x < 0) ? 0 : x;
+                y = (y < 0) ? 0 : y;
+
+                result = new Rect((int) x, (int) y,  (int) w,  (int) h);
+                Mat imageRect = image.clone();
+                Imgproc.rectangle(imageRect, new Point(x,y),new Point(x+w,y+h), new Scalar(100));
+                saveImg("test3.jpeg", imageRect);
                 break;
             }
 
         }
-        Log.d(TAG, "X11");
+        //Log.d(TAG, "X11");
         if(result!=null)
             Log.d(TAG, "Rectangle: "+result.toString());
         else
             Log.d(TAG, "Rectangle is null!");
-        Log.d(TAG, "X12");
+        //Log.d(TAG, "X12");
         return result;
 
     }
 
-
-    private void gradMinMax(Mat mat, double minVal, double maxVal) {
-        double minMat = Double.MAX_VALUE;
-        double[] array = mat.get(0,0);
-
-        int cols = mat.cols();
-        int rows = mat.rows();
+    private void gradMinMax(Mat mSrc, Mat mDst, double minVal, double maxVal) {
+        int cols = mSrc.cols();
+        int rows = mSrc.rows();
         for (int i = 0; i < rows; i++) {
             for (int j = 0; j < cols; j++) {
-                double[] value = mat.get(i, j);
-                double[] result = new double[value.length];
-                for(int k=0;k<value.length;k++) {
-                    result[k] = (int) (255 * ((value[k] - minVal) / (maxVal - minVal)));
-                    mat.put(i, j, result);
-                }
+                double[] src = mSrc.get(i, j);
+                double[] dst = new double[src.length];
+                for (int k = 0; k < src.length; k++)
+                    dst[k] = (int) (255 * ((src[k] - minVal) / (maxVal - minVal)));
+
+                mDst.put(i, j, dst);
             }
         }
     }
 
-
     private double minMat(Mat mat) {
         double minMat = Double.MAX_VALUE;
-        double[] array = mat.get(0,0);
-
-        for(int i=0;i<array.length;i++)
-            if(array[i]<minMat)
-                minMat=array[i];
+        int cols = mat.cols();
+        int rows = mat.rows();
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                double[] src = mat.get(i, j);
+                for (int k = 0; k < src.length; k++) {
+                    if (src[k] < minMat)
+                        minMat = src[i];
+                }
+            }
+        }
 
         return minMat;
     }
 
     private double maxMat(Mat mat) {
         double maxMat = Double.MIN_VALUE;
-        double[] array = mat.get(0,0);
-
-        for(int i=0;i<array.length;i++)
-            if(array[i]>maxMat)
-                maxMat=array[i];
+        int cols = mat.cols();
+        int rows = mat.rows();
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                double[] src = mat.get(i, j);
+                for (int k = 0; k < src.length; k++) {
+                    if (src[k] > maxMat)
+                        maxMat = src[k];
+                }
+            }
+        }
 
         return maxMat;
     }
 
-    private void absoluteMat(Mat src, Mat dst) {
-        int cols = src.cols();
-        int rows = src.rows();
-        for (int i = 0; i < rows; i++)
-            for (int j = 0; j < cols; j++)
-                dst.put(i, j, Math.abs(src.get(i, j)[0]));
+    private void absoluteMat(Mat mSrc, Mat mDst) {
+        int cols = mSrc.cols();
+        int rows = mSrc.rows();
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                double[] src = mSrc.get(i, j);
+                double[] dst = new double[src.length];
+                for (int k = 0; k < src.length; k++)
+                    dst[k] = Math.abs(src[k]);
+
+                mDst.put(i, j, dst);
+            }
+        }
     }
 
     private double selectBestAngle(List<Double> lAngle) {
-        double selAngle=Double.MAX_VALUE;
+        double selAngle = Double.MAX_VALUE;
 
-        for(double curAngle : lAngle) {
+        for (double curAngle : lAngle) {
             double absAngle = Math.abs(curAngle);
-            if(absAngle<5 && absAngle>0 && absAngle<Math.abs(selAngle))
+            if (absAngle < 5 && absAngle > 0 && absAngle < Math.abs(selAngle))
                 selAngle = curAngle;
         }
 
-        if(selAngle==Double.MAX_VALUE)
+        if (selAngle == Double.MAX_VALUE)
             selAngle = 0.0;
 
         return selAngle;
@@ -1280,36 +1455,36 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     }
 
     private double computeSkew( Mat src, double thres ) {
-        Log.d(TAG, "B1");
+        //Log.d(TAG, "B1");
         Mat img = new Mat(src.rows(), src.cols(), src.type());
         //Core.multiply(img, new Scalar(2.0), img);
         //Binarize it
         //Use adaptive threshold if necessary
         //Imgproc.adaptiveThreshold(img, img, 255, ADAPTIVE_THRESH_MEAN_C, THRESH_BINARY, 15, 40);
-        Log.d(TAG, "B2");
+        //Log.d(TAG, "B2");
         Imgproc.threshold( src.clone(), img, thres, 255, THRESH_BINARY );
 
         //saveImg("x41.jpeg", img);
         //Invert the colors (because objects are represented as white pixels, and the background is represented by black pixels)
-        Log.d(TAG, "B3");
+        //Log.d(TAG, "B3");
         Core.bitwise_not( img, img );
         Mat element = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3, 3));
 
-        Log.d(TAG, "B4");
+        //Log.d(TAG, "B4");
         //We can now perform our erosion, we must declare our rectangle-shaped structuring element and call the erode function
         Imgproc.erode(img, img, element);
         //saveImg("x42.jpeg", img);
 
-        Log.d(TAG, "B5");
+        //Log.d(TAG, "B5");
         //Find all white pixels
         Mat wLocMat = Mat.zeros(img.size(),img.type());
         Core.findNonZero(img, wLocMat);
 
-        Log.d(TAG, "B6");
+        //Log.d(TAG, "B6");
         //Create an empty Mat and pass it to the function
         MatOfPoint matOfPoint = new MatOfPoint( wLocMat );
 
-        Log.d(TAG, "B7");
+        //Log.d(TAG, "B7");
         //Translate MatOfPoint to MatOfPoint2f in order to user at a next step
         MatOfPoint2f mat2f = new MatOfPoint2f();
         matOfPoint.convertTo(mat2f, CvType.CV_32FC2);
@@ -1322,7 +1497,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         Point[] vertices = new Point[4];
         rotatedRect.points(vertices);
-        Log.d(TAG, "B9");
+        //Log.d(TAG, "B9");
 /*
         List<MatOfPoint> boxContours = new ArrayList<>();
         boxContours.add(new MatOfPoint(vertices));
@@ -1330,7 +1505,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         //saveImg("x43.jpeg", img);
 
 */
-        Log.d(TAG, "B10");
+        //Log.d(TAG, "B10");
         double resultAngle = rotatedRect.angle;
         if (resultAngle < -45.0)
             resultAngle = -(90.0 + resultAngle);
@@ -1339,6 +1514,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     }
 
     private void saveImg(String name, Mat img) {
+        Log.d(TAG, "Saving img: "+name);
         File sdCard = Environment.getExternalStorageDirectory();
         Imgcodecs.imwrite(sdCard.getAbsolutePath() + "/"+name, img);
     }
@@ -1414,6 +1590,37 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         return null;
     }
 
+
+    private MatOfPoint2f correctPerspective(MatOfPoint2f src, Size size) {
+
+        final List<Point> lPointSrc = src.toList();
+        if(lPointSrc.size()!=4)
+            return null;
+
+        final double halfX = size.width / 2;
+        final double halfY = size.height / 2;
+
+        Point point1 = lPointSrc.get(0);
+
+        List<Point> lPointDst = null;
+
+        if(point1.x < halfX && point1.y < halfY) {
+            lPointDst = new ArrayList(lPointSrc.size());
+            Point pointFinal = lPointSrc.get(3);
+            lPointDst.add(pointFinal);
+            for(int i=0;i<3;i++)
+                lPointDst.add(lPointSrc.get(i));
+        } else {
+            lPointDst = lPointSrc;
+        }
+
+        MatOfPoint2f result = new MatOfPoint2f();
+        result.fromList(lPointDst);
+
+        return result;
+    };
+
+
     private Mat applyTransformationRotation(Mat srcImage, MatOfPoint2f src) {
         Mat destImage = new Mat(srcImage.rows(), srcImage.cols(), srcImage.type());
 
@@ -1422,10 +1629,13 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         int minArea = (int) (x * y * 0.40);
         int area = (int) Imgproc.contourArea(src);
+        Log.d(TAG, " * applyTransformationRotation(): area = " + Imgproc.contourArea(src)+" minArea = "+minArea);
         if(area < minArea)
             return null;
 
-        Log.d(TAG, " * area = " + Imgproc.contourArea(src)+" minArea = "+minArea);
+        Log.d(TAG, " * applyTransformationRotation(): contour = "+getContourToString(src));
+
+        //Log.d(TAG, " * area = " + Imgproc.contourArea(src)+" minArea = "+minArea);
 
         Mat dst = new MatOfPoint2f(new Point(x, 0), new Point(0,0), new Point(0, y), new Point(x, y));
 
@@ -1433,10 +1643,19 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         Imgproc.warpPerspective(srcImage, destImage, trans, destImage.size());
 
-        double ratioWarped = destImage.cols()/destImage.rows();
+        //double ratioWarped = destImage.cols()/destImage.rows();
 
         return destImage;
     }
+
+    private String getContourToString(MatOfPoint2f src) {
+        StringBuilder sb = new StringBuilder();
+        for(Point p : src.toArray()) {
+            sb.append(p.toString());
+        }
+
+        return sb.toString();
+    };
 
     public void detectDocumentBack(Mat mGray) {
         Log.d(TAG, "detectDocumentFront() called");

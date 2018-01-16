@@ -1,7 +1,7 @@
 dependencies {
     compile (name: 'opencv-release', ext: 'aar')
     compile (name: 'facelib-release', ext: 'aar')
-//    compile (name: 'tess-two-release', ext: 'aar')
+    compile (name: 'tess-two-release', ext: 'aar')
 }
 repositories {
     flatDir{

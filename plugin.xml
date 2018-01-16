@@ -2,7 +2,7 @@
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
     xmlns:android="http://schemas.android.com/apk/res/android"
     id="com.legalpin.imagedetectionplugin"
-    version="0.1.1">
+    version="0.1.2">
     <name>Image Detection Plugin</name>
 
     <description>The ImageDetectionPlugin for Cordova enables the use of OpenCV SDK to detect an inputed image.</description>
@@ -57,6 +57,7 @@
       <source-file src="src/android/libs/build-extras.gradle" target-dir="." />
       <source-file src="src/android/libs/opencv-release.aar" target-dir="libs/" />
       <source-file src="src/android/libs/facelib-release.aar" target-dir="libs/" />
+      <source-file src="src/android/libs/tess-two-release.aar" target-dir="libs/" />
       <source-file src="src/android/ImageDetectionPlugin.java" target-dir="src/com/legalpin/imagedetectionplugin/" />
     </platform>
 
