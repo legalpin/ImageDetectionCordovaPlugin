@@ -21,7 +21,6 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
-import android.util.Base64;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.Surface;
@@ -32,6 +31,9 @@ import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.Toast;
+
+import com.googlecode.tesseract.android.TessBaseAPI;
+import com.legalpin.facelib.NativeMethods;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaInterface;
@@ -45,13 +47,10 @@ import org.opencv.android.BaseLoaderCallback;
 import org.opencv.android.CameraBridgeViewBase;
 import org.opencv.android.LoaderCallbackInterface;
 import org.opencv.android.OpenCVLoader;
-import org.opencv.android.Utils;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
-import org.opencv.core.MatOfDMatch;
 import org.opencv.core.MatOfDouble;
-import org.opencv.core.MatOfKeyPoint;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.MatOfRect;
@@ -60,8 +59,6 @@ import org.opencv.core.Rect;
 import org.opencv.core.RotatedRect;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
-import org.opencv.features2d.DescriptorExtractor;
-import org.opencv.features2d.FeatureDetector;
 import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.imgproc.Imgproc;
 import org.opencv.objdetect.CascadeClassifier;
@@ -74,18 +71,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
 import java.util.function.Predicate;
 
-import com.googlecode.tesseract.android.TessBaseAPI;
-import com.legalpin.facelib.NativeMethods;
-
 import static org.opencv.imgproc.Imgproc.THRESH_BINARY;
-import static org.opencv.imgproc.Imgproc.THRESH_OTSU;
 
 public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder.Callback {
 
@@ -126,11 +115,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private ArrayList<Mat> imagesFacesTmp;
     private ArrayList<String> facesList;
     private boolean useEigenfaces = false;
-    private boolean training = false;
     //private boolean detecting = false;
-    private boolean detectingFace = false;
-    private boolean detectingDocumentFront  = false;
-    private boolean detectingDocumentBack = false;
 
     private String currentTrainingFace = null;
 
@@ -141,11 +126,13 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private static final int NUM_USER_FACES        = 10;
     private static final int MAX_ATTEMPTS          = 10;
 
-    private static final int PROCESS_MODE_DETECT_FACE = 1;
-    private static final int PROCESS_MODE_TRAIN_FACE  = 2;
-    private static final int PROCESS_MODE_RECOG_FACE  = 3;
-    private static final int PROCESS_MODE_FRONT_ID    = 4;
-    private static final int PROCESS_MODE_BACK_ID     = 5;
+    private static final int C_FACE_DETECT     = 0x01;
+    private static final int C_FACE_RECOG      = 0x02;
+    private static final int C_FACE_TRAIN      = 0x04;
+    private static final int C_ID_FRONT_DETECT = 0x10;
+    private static final int C_ID_MRZ_DETECT   = 0x20;
+
+    private int detectorEngineState = 0;
 
 
     private TessBaseAPI tessBaseApi;
@@ -233,6 +220,19 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         }
     }
 
+    final static private boolean hasFlag(int state, int flag) {
+        return (state & flag)!=0;
+    }
+
+    final static private void setFlag(int state, int flag) {
+        state |= flag;
+    }
+
+    final static private void clearFlag(int state, int flag) {
+        state &= ~flag;
+    }
+
+
     public static File stream2file (InputStream in) throws IOException {
         final String PREFIX = "idplugin";
 
@@ -269,7 +269,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         if (action.equals("openCamera")) {
             cb = callbackContext;
             this.processFrames = false;
-            this.training = false;
+            this.detectorEngineState = 0;
 
             int type = -1;
             try {
@@ -318,7 +318,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         if (action.equals("isTraining")) {
             Log.i(TAG, "isTraining called");
-            PluginResult result = new PluginResult(PluginResult.Status.OK, this.training);
+            PluginResult result = new PluginResult(PluginResult.Status.OK, hasFlag(detectorEngineState, C_FACE_TRAIN));
             result.setKeepCallback(false);
             callbackContext.sendPluginResult(result);
 
@@ -328,7 +328,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         if(action.equals("startDetecting")) {
             cb = callbackContext;
 
-            Log.d(TAG, " ******************************* startDetecting called");
+            Log.d(TAG, "startDetecting(): called");
 
             int type = -1;
             try {
@@ -336,13 +336,22 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             } catch (JSONException je) {
             }
 
+            if(type==C_FACE_TRAIN) {
+                Log.e(TAG, "Face training cannot be called from startDetecting");
+                this.sendFinalResult("Face training cannot be called from startDetecting", false);
+
+                return true;
+            }
+
             Log.d(TAG, " ******************************* startDetecting: "+type);
-            if (type == 1 || type == -1)
-                startDetectingFace();
-            else if (type == 2)
+            if (type==-1 || hasFlag(detectorEngineState, C_FACE_RECOG))
+                startRecognizingFace();
+            else if (hasFlag(detectorEngineState, C_ID_FRONT_DETECT))
                 startDetectingDocumentFront();
-            else if (type == 3)
-                startDetectingDocumentBack();
+            else if (hasFlag(detectorEngineState, C_ID_MRZ_DETECT))
+                startDetectingDocumentMRZ();
+            else if (hasFlag(detectorEngineState, C_FACE_DETECT))
+                startDetectingFaceSimple();
 /*
             else {
                 PluginResult result = new PluginResult(PluginResult.Status.ERROR);
@@ -356,9 +365,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         if(action.equals("stopDetecting")) {
             Log.i(TAG, "stopDetecting called");
             this.processFrames = false;
-            this.detectingFace = false;
-            this.detectingDocumentFront = false;
-            this.detectingDocumentBack = false;
+            this.detectorEngineState = 0;
 
             PluginResult result = new PluginResult(PluginResult.Status.OK);
             result.setKeepCallback(false);
@@ -410,8 +417,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         currentTrainingFace = faceName;
 
-        this.detectingFace = false;
-        this.training = true;
+        setFlag(detectorEngineState, C_FACE_TRAIN);
         this.processFrames = true;
     }
 
@@ -423,8 +429,8 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         return false;
     }
 
-    private void startDetectingFace() {
-        Log.d(TAG, "startDetectingFace(): called");
+    private void startRecognizingFace() {
+        Log.d(TAG, "startRecognizingFace(): called");
 
         if(facesList.size()==0) {
             cb.error("NO FACES");
@@ -438,28 +444,39 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         this.numAttempts = 0;
         this.processFrames = true;
-        this.training = false;
-        this.detectingFace = true;
+        setFlag(detectorEngineState, C_FACE_RECOG);
     }
 
     private void startDetectingDocumentFront() {
-        Log.d(TAG, " ********************************* startDetectingDocumentFront(): called");
+        Log.d(TAG, "startRecognizingDocumentFront(): called");
 
         PluginResult pluginResult = new  PluginResult(PluginResult.Status.NO_RESULT);
         pluginResult.setKeepCallback(true); // Keep callback
         cb.sendPluginResult(pluginResult);
-        this.detectingDocumentFront = true;
         this.processFrames = true;
+        setFlag(detectorEngineState, C_ID_FRONT_DETECT);
     }
 
-    private void startDetectingDocumentBack() {
-        Log.d(TAG, "startDetectingDocumentBack(): called");
+    private void startDetectingDocumentMRZ() {
+        Log.d(TAG, "startRecognizingDocumentMRZ(): called");
 
         PluginResult pluginResult = new  PluginResult(PluginResult.Status.NO_RESULT);
         pluginResult.setKeepCallback(true); // Keep callback
         cb.sendPluginResult(pluginResult);
-        this.detectingDocumentBack = true;
         this.processFrames = true;
+        setFlag(detectorEngineState, C_ID_MRZ_DETECT);
+    }
+
+    private void startDetectingFaceSimple() {
+        Log.d(TAG, "startDetectingFaceSimple(): called");
+
+        PluginResult pluginResult = new  PluginResult(PluginResult.Status.NO_RESULT);
+        pluginResult.setKeepCallback(true); // Keep callback
+        cb.sendPluginResult(pluginResult);
+
+        this.numAttempts = 0;
+        this.processFrames = true;
+        setFlag(detectorEngineState, C_FACE_DETECT);
     }
 
     private void closeCamera() {
@@ -478,8 +495,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         camera = null;
 
         processFrames = false;
-        detectingFace = false;
-        training = false;
+        detectorEngineState=0;
 
         setCameraBackground(true);
     }
@@ -879,45 +895,20 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                     mYuv = new Mat(width, height, CvType.CV_8UC1);
 
                     mYuvOrig.put(0, 0, data);
-                    
-                    saveImg("test1.jpeg", mYuvOrig);
-                    if(training || detectingFace) {
-                        Core.transpose(mYuvOrig, mYuv);
-                        Core.flip(mYuv, mYuv, -1);
 
-                        int minDimension = height > width ? width : height;
-
-                        final MatOfRect faces = new MatOfRect();
-                        final int absoluteFaceSize = Math.round(minDimension * 0.5f);
-                        final int minValidFaceSize = Math.round(minDimension * 0.75f);
-
-                        //faceCascade.detectMultiScale(mYuv, faces, 1.3, 2, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
-                        faceCascade.detectMultiScale(mYuv, faces, 1.3, 5, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
-
-                        org.opencv.core.Rect[] facesArray = faces.toArray();
-
-                        final int facesLength = facesArray.length;
-                        if (facesLength == 1 && facesArray[0].height >= minValidFaceSize) {
-                            org.opencv.core.Rect face = facesArray[0];
-                            Log.d(TAG,"FACE CASCADE CLASSIFIER OK!: IH:"+mYuv.height()+"AFS:" +absoluteFaceSize+" H:"+face.height+" W:"+face.width);
-
-                            if(training) {
-                                saveFace(mYuv);
-                                //Log.d(TAG, "Faces array size: " + facesLength);
-                            }
-
-                            if(detectingFace) {
-                                detectFace(mYuv);
-                                //Log.d(TAG, "Faces array size: " + facesLength);
-                            }
-                        }
-                    } else {
+                    //saveImg("test1.jpeg", mYuvOrig);
+                    if(hasFlag(detectorEngineState, C_FACE_RECOG)) {
+                        if(detectFace(mYuv))
+                            recognizeFace(mYuv);
+                    } else if(hasFlag(detectorEngineState, C_FACE_TRAIN)) {
+                        if(detectFace(mYuv))
+                            saveFace(mYuv);
+                    } else if(hasFlag(detectorEngineState, C_ID_FRONT_DETECT)) {
                         mYuv = mYuvOrig;
-                        if(detectingDocumentFront)
-                            detectDocumentFront(mYuv);
-
-                        if(detectingDocumentBack)
-                            detectDocumentBack(mYuv);
+                        detectDocumentFront(mYuv);
+                    } else if(hasFlag(detectorEngineState, C_ID_MRZ_DETECT)) {
+                        mYuv = mYuvOrig;
+                        detectDocumentBack(mYuv);
                     }
 
                     thread_over = true;
@@ -928,6 +919,32 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         }
     };
+
+    private boolean detectFace(Mat mYuv) {
+        int width = mYuv.cols();
+        int height = mYuv.rows();
+
+        int minDimension = height > width ? width : height;
+
+        final MatOfRect faces = new MatOfRect();
+        final int absoluteFaceSize = Math.round(minDimension * 0.5f);
+        final int minValidFaceSize = Math.round(minDimension * 0.75f);
+
+        //faceCascade.detectMultiScale(mYuv, faces, 1.3, 2, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
+        faceCascade.detectMultiScale(mYuv, faces, 1.3, 5, Objdetect.CASCADE_SCALE_IMAGE, new Size(absoluteFaceSize, absoluteFaceSize), new Size());
+
+        org.opencv.core.Rect[] facesArray = faces.toArray();
+
+        final int facesLength = facesArray.length;
+        if (facesLength == 1 && facesArray[0].height >= minValidFaceSize) {
+            org.opencv.core.Rect face = facesArray[0];
+            Log.d(TAG,"FACE CASCADE CLASSIFIER OK!: IH:"+mYuv.height()+"AFS:" +absoluteFaceSize+" H:"+face.height+" W:"+face.width);
+            return true;
+        }
+
+        return false;
+
+    }
 
     private void saveFace(Mat image_pattern) {
         try {
@@ -942,7 +959,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
 
             if (imagesFacesTmp.size() >= NUM_USER_FACES) {
-                training = false;
+                this.detectorEngineState = 0;
                 imagesFaces.addAll(imagesFacesTmp);
                 facesList.add(currentTrainingFace);
                 trainFaces();
@@ -1041,8 +1058,8 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     };
 
 
-    public void detectFace(Mat mGray) {
-        Log.d(TAG, "detectFace() called");
+    public void recognizeFace(Mat mGray) {
+        Log.d(TAG, "recognizeFace() called");
         NativeMethods.MeasureDistTask mMeasureDistTask = null;
 
         if (mMeasureDistTask != null && mMeasureDistTask.getStatus() != AsyncTask.Status.FINISHED) {
@@ -1261,7 +1278,7 @@ File outputFile = File.createTempFile("prefix", "extension", outputDir);
         return extractedText;
     }
 
-
+    @SuppressLint("NewApi")
     private Rect detectMRZ(Mat image) {
         saveImg("test2.jpeg",image);
         //Log.d(TAG, "X1");
@@ -1705,9 +1722,7 @@ File outputFile = File.createTempFile("prefix", "extension", outputDir);
 
     private void finishDetection(String result, boolean ok) {
         this.processFrames=false;
-        this.detectingFace=false;
-        this.detectingDocumentFront=false;
-        this.detectingDocumentBack=false;
+        this.detectorEngineState=0;
         sendFinalResult(result, ok);
     }
 

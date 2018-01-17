@@ -6,6 +6,7 @@ var ImageDetectionPlugin = function () {};
 ImageDetectionPlugin.prototype.DETECT_FACE = 1;
 ImageDetectionPlugin.prototype.DETECT_ID_FRONT = 2;
 ImageDetectionPlugin.prototype.DETECT_ID_BACK = 3;
+ImageDetectionPlugin.prototype.DETECT_FACE_SIMPLE = 4;
 
 ImageDetectionPlugin.prototype.CAMERA_FRONT = 1;
 ImageDetectionPlugin.prototype.CAMERA_BACK = 2;
