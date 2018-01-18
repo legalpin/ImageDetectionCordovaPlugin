@@ -3,10 +3,11 @@
  **/
 var ImageDetectionPlugin = function () {};
 
-ImageDetectionPlugin.prototype.DETECT_FACE = 1;
-ImageDetectionPlugin.prototype.DETECT_ID_FRONT = 2;
-ImageDetectionPlugin.prototype.DETECT_ID_BACK = 3;
-ImageDetectionPlugin.prototype.DETECT_FACE_SIMPLE = 4;
+ImageDetectionPlugin.prototype.C_FACE_DETECT     = 1;
+ImageDetectionPlugin.prototype.C_FACE_RECOG      = 2;
+ImageDetectionPlugin.prototype.C_FACE_TRAIN      = 4;
+ImageDetectionPlugin.prototype.C_ID_FRONT_DETECT = 16;
+ImageDetectionPlugin.prototype.C_ID_MRZ_DETECT   = 32;
 
 ImageDetectionPlugin.prototype.CAMERA_FRONT = 1;
 ImageDetectionPlugin.prototype.CAMERA_BACK = 2;
