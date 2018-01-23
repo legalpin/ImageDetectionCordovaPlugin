@@ -51,6 +51,7 @@ import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfDouble;
+import org.opencv.core.MatOfInt;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.MatOfRect;
@@ -74,6 +75,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.function.Predicate;
 
+import static org.opencv.imgproc.Imgproc.ADAPTIVE_THRESH_MEAN_C;
 import static org.opencv.imgproc.Imgproc.THRESH_BINARY;
 
 public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder.Callback {
@@ -126,11 +128,12 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
     private static final int NUM_USER_FACES        = 10;
     private static final int MAX_ATTEMPTS          = 10;
 
-    private static final int C_FACE_DETECT     = 0x01;
-    private static final int C_FACE_RECOG      = 0x02;
-    private static final int C_FACE_TRAIN      = 0x04;
-    private static final int C_ID_FRONT_DETECT = 0x10;
-    private static final int C_ID_MRZ_DETECT   = 0x20;
+    private static final int C_FACE_DETECT     = 3;
+    private static final int C_FACE_RECOG      = 4;
+    private static final int C_FACE_TRAIN      = 5;
+    private static final int C_ID_FRONT_DETECT = 6;
+    private static final int C_ID_MRZ_DETECT   = 7;
+    private static final int C_ID_AUTO_DETECT  = 8;
 
     private int detectorEngineState = 0;
 
@@ -219,15 +222,16 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             e.printStackTrace();
         }
     }
-
+/*
     final static private boolean hasFlag(int state, int flag) {
         return (state & flag) != 0;
     }
-
+*/
+/*
     final static private int setFlag(int state, int flag) {
         return state | flag;
     }
-
+*/
     public static File stream2file (InputStream in) throws IOException {
         final String PREFIX = "idplugin";
 
@@ -313,7 +317,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         if (action.equals("isTraining")) {
             Log.i(TAG, "isTraining called");
-            PluginResult result = new PluginResult(PluginResult.Status.OK, hasFlag(detectorEngineState, C_FACE_TRAIN));
+            PluginResult result = new PluginResult(PluginResult.Status.OK, detectorEngineState==C_FACE_TRAIN);
             result.setKeepCallback(false);
             callbackContext.sendPluginResult(result);
 
@@ -338,15 +342,17 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                 return true;
             }
 
-            Log.d(TAG, " ******************************* startDetecting: "+type);
-            if (type==-1 || hasFlag(type, C_FACE_RECOG))
+            Log.d(TAG, "startDetecting: type="+type);
+            if (type==-1 || type == C_FACE_RECOG)
                 startRecognizingFace();
-            else if (hasFlag(type, C_ID_FRONT_DETECT))
+            else if (type == C_ID_FRONT_DETECT)
                 startDetectingDocumentFront();
-            else if (hasFlag(type, C_ID_MRZ_DETECT))
+            else if (type == C_ID_MRZ_DETECT)
                 startDetectingDocumentMRZ();
-            else if (hasFlag(type, C_FACE_DETECT))
+            else if (type == C_FACE_DETECT)
                 startDetectingFaceSimple();
+            else if (type == C_ID_AUTO_DETECT)
+                startDetectingDocumentAuto();
 /*
             else {
                 PluginResult result = new PluginResult(PluginResult.Status.ERROR);
@@ -411,8 +417,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         }
 
         currentTrainingFace = faceName;
-
-        detectorEngineState = setFlag(detectorEngineState, C_FACE_TRAIN);
+        detectorEngineState = C_FACE_TRAIN;
         this.processFrames = true;
     }
 
@@ -439,7 +444,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         this.numAttempts = 0;
         this.processFrames = true;
-        detectorEngineState = setFlag(detectorEngineState, C_FACE_RECOG);
+        detectorEngineState = C_FACE_RECOG;
     }
 
     private void startDetectingDocumentFront() {
@@ -449,7 +454,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         pluginResult.setKeepCallback(true); // Keep callback
         cb.sendPluginResult(pluginResult);
         this.processFrames = true;
-        detectorEngineState = setFlag(detectorEngineState, C_ID_FRONT_DETECT);
+        detectorEngineState = C_ID_FRONT_DETECT;
     }
 
     private void startDetectingDocumentMRZ() {
@@ -459,8 +464,20 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         pluginResult.setKeepCallback(true); // Keep callback
         cb.sendPluginResult(pluginResult);
         this.processFrames = true;
-        detectorEngineState = setFlag(detectorEngineState, C_ID_MRZ_DETECT);
+        detectorEngineState = C_ID_MRZ_DETECT;
     }
+
+    private void startDetectingDocumentAuto() {
+        Log.d(TAG, "startDetectingDocumentAuto(): called");
+
+        PluginResult pluginResult = new  PluginResult(PluginResult.Status.NO_RESULT);
+        pluginResult.setKeepCallback(true); // Keep callback
+        cb.sendPluginResult(pluginResult);
+
+        this.processFrames = true;
+        detectorEngineState = C_ID_AUTO_DETECT;
+    }
+
 
     private void startDetectingFaceSimple() {
         Log.d(TAG, "startDetectingFaceSimple(): called");
@@ -471,7 +488,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         this.numAttempts = 0;
         this.processFrames = true;
-        detectorEngineState = setFlag(detectorEngineState, C_FACE_DETECT);
+        detectorEngineState = C_FACE_DETECT;
     }
 
     private void closeCamera() {
@@ -866,6 +883,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         }
 
         return new Size(calcWidth, calcHeight);
+
     }
 
     @SuppressWarnings("deprecation")
@@ -887,30 +905,33 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
                     int width  = params.getPreviewSize().width;
 
                     mYuvOrig = new Mat(height, width, CvType.CV_8UC1);
-                    mYuv = new Mat(width, height, CvType.CV_8UC1);
-
+                    mYuv = matDup(mYuvOrig);
                     mYuvOrig.put(0, 0, data);
+
                     double sharpness = getSharpness(mYuvOrig);
-                    if(sharpness>40) {
-                        saveImgSD("test1.jpeg", mYuvOrig);
-                        if (hasFlag(detectorEngineState, C_FACE_RECOG)) {
+                    if(sharpness>30) {
+                        //saveImgSD("test1.jpeg", mYuvOrig);
+                        if (detectorEngineState == C_FACE_RECOG) {
                             rotateToPortrait(mYuvOrig, mYuv);
-                            if (detectFace(mYuv))
+                            if (detectFace(mYuv, sharpness))
                                 recognizeFace(mYuv);
-                        } else if (hasFlag(detectorEngineState, C_FACE_TRAIN)) {
+                        } else if (detectorEngineState == C_FACE_TRAIN) {
                             rotateToPortrait(mYuvOrig, mYuv);
-                            if (detectFace(mYuv))
+                            if (detectFace(mYuv, sharpness))
                                 storeFace(mYuv);
-                        } else if (hasFlag(detectorEngineState, C_ID_FRONT_DETECT)) {
+                        } else if (detectorEngineState == C_ID_FRONT_DETECT) {
                             mYuv = mYuvOrig;
-                            detectDocumentFront(mYuv);
-                        } else if (hasFlag(detectorEngineState, C_ID_MRZ_DETECT)) {
+                            detectDocumentFront(mYuv, sharpness);
+                        } else if (detectorEngineState == C_ID_MRZ_DETECT) {
                             mYuv = mYuvOrig;
-                            detectDocumentMRZ(mYuv);
-                        } else if (hasFlag(detectorEngineState, C_FACE_DETECT)) {
+                            detectDocumentMRZ(mYuv, sharpness);
+                        } else if (detectorEngineState == C_ID_AUTO_DETECT) {
+                            mYuv = mYuvOrig;
+                            detectDocumentAuto(mYuv, sharpness);
+                        } else if (detectorEngineState == C_FACE_DETECT) {
                             rotateToPortrait(mYuvOrig, mYuv);
-                            saveImgSD("test2.jpeg", mYuv);
-                            if (detectFace(mYuv))
+                            //saveImgSD("test2.jpeg", mYuv);
+                            if (detectFace(mYuv, sharpness))
                                 sendFace(mYuv);
                         }
                     } else{
@@ -931,7 +952,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         Core.flip(mYuvDst, mYuvDst, -1);
     }
 
-    private boolean detectFace(Mat mYuv) {
+    private boolean detectFace(Mat mYuv, double sharpness) {
         int width = mYuv.cols();
         int height = mYuv.rows();
 
@@ -1106,7 +1127,14 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         //mMeasureDistTask.execute(mGray);
     }
 
-    public Mat[] detectDocumentGeneric(Mat mGray) {
+
+
+    public Mat[] detectDocumentGeneric(Mat mGrayInput, double sharpness) {
+/*
+        Mat mGray = matDup(mGrayInput);
+        Imgproc.equalizeHist(mGrayInput, mGray);
+*/
+        Mat mGray = mGrayInput;
         double ratio = mGray.rows() / (double) mGray.cols();
         //Log.d(TAG, "detectDocumentFront(): ratio: "+ratio);
         int RESIZE = 500;
@@ -1124,18 +1152,19 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         Size sz = new Size(newHeight, newWidth);
         Imgproc.resize( mGray, mSmall, sz );
 
-        double sharpness = getSharpness(mGray);
+        //double sharpness = getSharpness(mGray);
         Log.d(TAG, "Image sharpness: "+sharpness);
 
-        if(sharpness < 100) {
+        if(sharpness < 80) {
             Log.d(TAG, "Blurry image not valid");
             return null;
         }
 
-        Mat mCanny = getEdgesFromImage(mSmall);
-        MatOfPoint2f contoursSmall = findContours(mCanny);
-        if(contoursSmall == null)
+        MatOfPoint2f contoursSmall = findContours(mSmall);
+        if(contoursSmall == null) {
+            Log.d(TAG, "No contours found");
             return null;
+        }
 
         MatOfPoint2f contoursOK = correctPerspective(contoursSmall, mSmall.size());
 /*
@@ -1157,25 +1186,33 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         return new Mat[]{mWarpedBig, mWarpedSmall};
     }
-    public void detectDocumentFront(Mat mGray) {
+
+
+    public void detectDocumentFront(Mat mGray, double sharpness) {
         Log.d(TAG, "detectDocumentFront() called");
 
-        Mat[] images = this.detectDocumentGeneric(mGray);
+        Mat[] images = this.detectDocumentGeneric(mGray, sharpness);
 
         if(images==null)
             return;
 
         final Mat mWarpedBig   = images[0];
-        final Mat mWarpedSmall = images[1];
 
         String path = this.saveImgTemp("documentFront.jpeg", mWarpedBig);
+
         this.finishDetection(path, true);
     }
 
-    public void detectDocumentMRZ(Mat mGray) {
+
+    private String processMRZPart(Mat mWarpedBig, Mat mWarpedSmall, Rect rectSmall) {
+        Rect rectBig = recalculateRect(mWarpedSmall.size(), mWarpedBig.size(), rectSmall);
+        return getImageToString(mWarpedBig, rectBig);
+    }
+
+    public void detectDocumentMRZ(Mat mGray, double sharpness) {
         Log.d(TAG, "detectDocumentMRZ() called");
 
-        final Mat[] images = this.detectDocumentGeneric(mGray);
+        final Mat[] images = this.detectDocumentGeneric(mGray, sharpness);
 
         if(images==null)
             return;
@@ -1184,15 +1221,11 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
         final Mat mWarpedSmall = images[1];
 
         Rect rectSmall = detectMRZ(mWarpedSmall);
-        if(rectSmall==null)
-            return;
-
-        Rect rectBig = recalculateRect(mWarpedSmall.size(), mWarpedBig.size(), rectSmall);
-
         if (rectSmall == null)
             return;
 
-        String text = getImageToString(mWarpedBig, rectBig);
+        String text = processMRZPart(mWarpedBig, mWarpedSmall, rectSmall);
+
         Log.d(TAG, "TEXTO EXTRAIDO:\n" + text);
         if(text==null)
             return;
@@ -1204,7 +1237,7 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
             json.put("result", path);
             json.put("text",text);
         } catch (JSONException e) {
-            e.printStackTrace();
+            //e.printStackTrace();
             json = null;
         }
 
@@ -1213,6 +1246,47 @@ public class ImageDetectionPlugin extends CordovaPlugin implements SurfaceHolder
 
         this.finishDetection(json, true);
     }
+
+    public void detectDocumentAuto(Mat mGray, double sharpness) {
+        Log.d(TAG, "detectDocumentAuto() called");
+
+        final Mat[] images = this.detectDocumentGeneric(mGray, sharpness);
+
+        if(images==null)
+            return;
+
+        final Mat mWarpedBig   = images[0];
+        final Mat mWarpedSmall = images[1];
+
+        Rect rectSmall = detectMRZ(mWarpedSmall);
+        boolean hasMrz = rectSmall != null;
+
+        String text = null;
+
+        if(hasMrz)
+            text = processMRZPart(mWarpedBig, mWarpedSmall, rectSmall);
+
+        Log.d(TAG, "TEXTO EXTRAIDO:\n" + text);
+
+        String path = this.saveImgTemp("documentFront.jpeg", mWarpedBig);
+        JSONObject json = null;
+        try {
+            json = new JSONObject();
+            json.put("result", path);
+            json.put("mrz", hasMrz ? true : false);
+            if(hasMrz && text!=null)
+                json.put("text", text);
+        } catch (JSONException e) {
+            //e.printStackTrace();
+            json = null;
+        }
+
+        if(json==null)
+            return;
+
+        this.finishDetection(json, true);
+    }
+
 
     private double getSharpness(Mat matGray) {
         Mat destination = new Mat();
@@ -1354,6 +1428,7 @@ File outputFile = File.createTempFile("prefix", "extension", outputDir);
         //Log.d(TAG, "X7");
         Imgproc.morphologyEx(gradX, gradX, Imgproc.MORPH_CLOSE, rectKernel);
         Imgproc.threshold(gradX, thres, 0, 255, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
+
 
         Imgproc.morphologyEx(thres, thres, Imgproc.MORPH_CLOSE, sqKernel);
         Mat element = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3, 3));
@@ -1592,9 +1667,16 @@ File outputFile = File.createTempFile("prefix", "extension", outputDir);
     }
 
     private Mat getEdgesFromImage(Mat mGray) {
+        //saveImgSD("x1.jpeg", mGray);
+        Mat mThres = matDup(mGray);
+
+        //Imgproc.adaptiveThreshold(mGray, mThres, 255, ADAPTIVE_THRESH_MEAN_C, THRESH_BINARY, 15, 40);
+
+        //saveImgSD("x2.jpeg", mThres);
+
         Mat mGaussian = new Mat(mGray.rows(),mGray.cols(),mGray.type());
-        //Mat mMul = mGaussian.clone();
-        //Mat mAdd = mGaussian.clone();
+
+
         Mat mCanny = mGaussian.clone();
 
         //Core.multiply(mGray, new Scalar(2.0), mMul);
@@ -1608,8 +1690,30 @@ File outputFile = File.createTempFile("prefix", "extension", outputDir);
         return mCanny;
     }
 
+    private Mat matDup(Mat src) {
+        return new Mat(src.cols(), src.rows(), src.type());
+    }
+
+    MatOfPoint getMatOfPointFromInt(MatOfPoint mopIn, MatOfInt hull) {
+        MatOfPoint mopOut = new MatOfPoint();
+        mopOut.create((int)hull.size().height,1,CvType.CV_32SC2);
+
+        for(int i = 0; i < hull.size().height ; i++)
+        {
+            int index = (int)hull.get(i, 0)[0];
+            double[] point = new double[] {
+                    mopIn.get(index, 0)[0], mopIn.get(index, 0)[1]
+            };
+            mopOut.put(i, 0, point);
+        }
+
+        return mopOut;
+    }
+
     @SuppressLint("NewApi")
-    private MatOfPoint2f findContours(Mat mCanny) {
+    private MatOfPoint2f findContours(Mat mImage) {
+        Mat mCanny = getEdgesFromImage(mImage);
+
         List<MatOfPoint> contours = new ArrayList<MatOfPoint>();
         Imgproc.findContours(mCanny.clone(), contours, new Mat(),  Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
 
@@ -1634,13 +1738,6 @@ File outputFile = File.createTempFile("prefix", "extension", outputDir);
             }
         });
 
-/*
-        int i=0;
-        for(MatOfPoint contour : contours) {
-            Log.d(TAG, " * Contour area["+(i++)+"]: "+Imgproc.contourArea(contour));
-        }
-*/
-
         if(contours.size()>5)
             contours = contours.subList(0, 5);
 
@@ -1651,12 +1748,25 @@ File outputFile = File.createTempFile("prefix", "extension", outputDir);
 
 
             //Processing on mMOP2f1 which is in type MatOfPoint2f
-            double approxDistance = Imgproc.arcLength(contour2f,true)*0.02;
+
+            //double approxDistance = Imgproc.arcLength(contour2f,true)*0.02;
+            double approxDistance = Imgproc.arcLength(contour2f,true)*0.1;
             Imgproc.approxPolyDP(contour2f,approxCurve,approxDistance,true);
 
             //convert to MatofPoint
-            if(approxCurve.toArray().length == 4)
+            if(approxCurve.toArray().length == 4) {
+                MatOfPoint approxCurvePoint = new MatOfPoint(approxCurve.toArray());
+/*
+                final Mat mImgTest = mImage.clone();
+
+                Rect r1 = Imgproc.boundingRect(approxCurvePoint);
+
+                Imgproc.rectangle(mImgTest, r1.tl(), r1.br(),new Scalar(255), 2);
+                saveImgSD("test1.jpeg", mImgTest);
+*/
                 return approxCurve;
+            }
+
         }
 
         return null;

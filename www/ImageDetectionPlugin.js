@@ -3,15 +3,16 @@
  **/
 var ImageDetectionPlugin = function () {};
 
-ImageDetectionPlugin.prototype.C_FACE_DETECT     = 1;
-ImageDetectionPlugin.prototype.C_FACE_RECOG      = 2;
-ImageDetectionPlugin.prototype.C_FACE_TRAIN      = 4;
-ImageDetectionPlugin.prototype.C_ID_FRONT_DETECT = 16;
-ImageDetectionPlugin.prototype.C_ID_MRZ_DETECT   = 32;
 
 ImageDetectionPlugin.prototype.CAMERA_FRONT = 1;
 ImageDetectionPlugin.prototype.CAMERA_BACK = 2;
 
+ImageDetectionPlugin.prototype.C_FACE_DETECT     = 3;
+ImageDetectionPlugin.prototype.C_FACE_RECOG      = 4;
+ImageDetectionPlugin.prototype.C_FACE_TRAIN      = 5;
+ImageDetectionPlugin.prototype.C_ID_FRONT_DETECT = 6;
+ImageDetectionPlugin.prototype.C_ID_MRZ_DETECT   = 7;
+ImageDetectionPlugin.prototype.C_ID_AUTO_DETECT  = 8;
 
 ImageDetectionPlugin.prototype.openCamera = function (type, successCallback, errorCallback) {
   cordova.exec(successCallback, errorCallback, "ImageDetectionPlugin", "openCamera", [type]);
